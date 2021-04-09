@@ -10,22 +10,23 @@ class lattice:
         self.data[:,1] = b
         self.data[:,2] = c
 
-    def vector_a(self):
+    def vector_a(self) -> np.ndarray:
         return self.data[:,0]
 
-    def vector_b(self):
+    def vector_b(self) -> np.ndarray:
         return self.data[:,1]
 
-    def vector_c(self):
+    def vector_c(self) -> np.ndarray:
         return self.data[:,2]
 
-    def volume(self):
-        return np.dot( self.data[:,0], np.cross(self.data[:,1], self.data[:,2]) )
+    def volume(self) -> np.float64:
+        return np.dot( self.data[:,0], \
+                       np.cross(self.data[:,1], self.data[:,2]) )
 
-    def get_vector(self, idx):
+    def get_vector(self, idx) -> np.ndarray:
         return self.data[:,idx]
     
-    def reciprocal_lattice(self):
+    def reciprocal_lattice(self) -> lattice:
         a = self.data[:,0]
         b = self.data[:,1]
         c = self.data[:,2]
