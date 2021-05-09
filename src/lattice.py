@@ -26,7 +26,7 @@ class lattice:
     def get_vector(self, idx) -> np.ndarray:
         return self.data[:,idx]
     
-    def reciprocal_lattice(self) -> lattice:
+    def reciprocal_lattice(self):
         a = self.data[:,0]
         b = self.data[:,1]
         c = self.data[:,2]
