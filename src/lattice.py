@@ -1,65 +1,216 @@
+"""
+Crystal lattice operations.
+
+Handles lattice vectors, reciprocal lattice, and volume calculations.
+"""
+
 import numpy as np
+from .constants import TWOPI
 
-import numpy.typing as npt
 
-class lattice:
-
-    def __init__(self, a : npt.ArrayLike, b , c):
-        self.data = np.zeros( (3,3), order = 'F' )
-        self.data[:,0] = a
-        self.data[:,1] = b
-        self.data[:,2] = c
-
-    def vector_a(self) -> np.ndarray:
-        return self.data[:,0]
-
-    def vector_b(self) -> np.ndarray:
-        return self.data[:,1]
-
-    def vector_c(self) -> np.ndarray:
-        return self.data[:,2]
-
-    def volume(self) -> np.float64:
-        return np.dot( self.data[:,0], \
-                       np.cross(self.data[:,1], self.data[:,2]) )
-
-    def get_vector(self, idx) -> np.ndarray:
-        return self.data[:,idx]
+class Lattice:
+    """
+    Crystal lattice defined by three lattice vectors.
     
-    def reciprocal_lattice(self):
-        a = self.data[:,0]
-        b = self.data[:,1]
-        c = self.data[:,2]
-
-        factor = 2.0 * np.pi / self.volume()
+    The lattice vectors are stored as rows of a 3x3 matrix:
+        a = lattice_vectors[0]
+        b = lattice_vectors[1]  
+        c = lattice_vectors[2]
+    
+    Attributes:
+        vectors: 3x3 array of lattice vectors (rows)
+        volume: Unit cell volume
+        reciprocal: 3x3 array of reciprocal lattice vectors
+    """
+    
+    def __init__(self, vectors):
+        """
+        Initialize lattice from lattice vectors.
         
-        return lattice( np.cross(b,c) * factor, \
-                        np.cross(c,a) * factor, \
-                        np.cross(a,b) * factor )
-
-    def __str__(self):
-        des = ""
-        for i in range(3):
-            des = des + \
-                  "%16.12f\t%16.12f\t%16.12f\n" % \
-                  ( self.data[0,i], self.data[1,i], self.data[2,i] )
-        return des
-
-if __name__ == '__main__':
-    a = [ 8.0, 0.0, 0.0 ]
-    b = [ 0.0, 8.0, 0.0 ]
-    c = [ 0.0, 0.0, 12.0 ]
+        Args:
+            vectors: 3x3 array-like, lattice vectors as rows
+                     [[a1, a2, a3], [b1, b2, b3], [c1, c2, c3]]
+        """
+        self.vectors = np.array(vectors, dtype=float)
+        assert self.vectors.shape == (3, 3), "Lattice vectors must be 3x3"
+        
+        self._volume = None
+        self._reciprocal = None
     
-    latt = lattice(a, b, c)
+    @classmethod
+    def cubic(cls, a):
+        """
+        Create a simple cubic lattice.
+        
+        Args:
+            a: Lattice constant (cube side length)
+        
+        Returns:
+            Lattice object
+        """
+        vectors = a * np.eye(3)
+        return cls(vectors)
     
-    print( latt )
-
-    blatt = latt.reciprocal_lattice()
-
-    print( blatt )
+    @classmethod
+    def fcc(cls, a):
+        """
+        Create FCC (face-centered cubic) primitive cell.
+        
+        The primitive vectors are:
+            a1 = a/2 * (0, 1, 1)
+            a2 = a/2 * (1, 0, 1)
+            a3 = a/2 * (1, 1, 0)
+        
+        Args:
+            a: Conventional cubic lattice constant
+        
+        Returns:
+            Lattice object for FCC primitive cell
+        """
+        vectors = 0.5 * a * np.array([
+            [0, 1, 1],
+            [1, 0, 1],
+            [1, 1, 0]
+        ], dtype=float)
+        return cls(vectors)
     
-    for i in range(3):
-        for j in range(3):
-            print( "%16.12f" % \
-                   np.dot(latt.get_vector(i), blatt.get_vector(j)), end = "\t" )
-        print()
+    @classmethod
+    def bcc(cls, a):
+        """
+        Create BCC (body-centered cubic) primitive cell.
+        
+        The primitive vectors are:
+            a1 = a/2 * (-1, 1, 1)
+            a2 = a/2 * (1, -1, 1)
+            a3 = a/2 * (1, 1, -1)
+        
+        Args:
+            a: Conventional cubic lattice constant
+        
+        Returns:
+            Lattice object for BCC primitive cell
+        """
+        vectors = 0.5 * a * np.array([
+            [-1, 1, 1],
+            [1, -1, 1],
+            [1, 1, -1]
+        ], dtype=float)
+        return cls(vectors)
+    
+    @classmethod
+    def hexagonal(cls, a, c):
+        """
+        Create hexagonal lattice.
+        
+        Args:
+            a: In-plane lattice constant
+            c: Out-of-plane lattice constant
+        
+        Returns:
+            Lattice object for hexagonal cell
+        """
+        vectors = np.array([
+            [a, 0, 0],
+            [-a/2, a * np.sqrt(3)/2, 0],
+            [0, 0, c]
+        ], dtype=float)
+        return cls(vectors)
+    
+    @classmethod
+    def from_parameters(cls, a, b, c, alpha=90.0, beta=90.0, gamma=90.0):
+        """
+        Create lattice from lattice parameters.
+        
+        Args:
+            a, b, c: Lattice constants
+            alpha, beta, gamma: Angles in degrees (default: 90 for orthorhombic)
+        
+        Returns:
+            Lattice object
+        """
+        # Convert angles to radians
+        alpha_rad = np.radians(alpha)
+        beta_rad = np.radians(beta)
+        gamma_rad = np.radians(gamma)
+        
+        # Build lattice vectors
+        # a along x-axis
+        va = np.array([a, 0.0, 0.0])
+        
+        # b in xy-plane
+        vb = np.array([
+            b * np.cos(gamma_rad),
+            b * np.sin(gamma_rad),
+            0.0
+        ])
+        
+        # c in general direction
+        cx = c * np.cos(beta_rad)
+        cy = c * (np.cos(alpha_rad) - np.cos(beta_rad) * np.cos(gamma_rad)) / np.sin(gamma_rad)
+        cz = np.sqrt(c**2 - cx**2 - cy**2)
+        vc = np.array([cx, cy, cz])
+        
+        return cls(np.array([va, vb, vc]))
+    
+    @property
+    def volume(self):
+        """Unit cell volume (scalar triple product)."""
+        if self._volume is None:
+            self._volume = abs(np.linalg.det(self.vectors))
+        return self._volume
+    
+    @property
+    def reciprocal_vectors(self):
+        """
+        Reciprocal lattice vectors (2*pi factor included).
+        
+        b_i = 2*pi * (a_j x a_k) / (a_i . (a_j x a_k))
+        """
+        if self._reciprocal is None:
+            # Transpose of inverse, scaled by 2*pi
+            self._reciprocal = TWOPI * np.linalg.inv(self.vectors).T
+        return self._reciprocal
+    
+    def get_vector_a(self):
+        """Return first lattice vector."""
+        return self.vectors[0]
+    
+    def get_vector_b(self):
+        """Return second lattice vector."""
+        return self.vectors[1]
+    
+    def get_vector_c(self):
+        """Return third lattice vector."""
+        return self.vectors[2]
+    
+    def cart_to_frac(self, cart_coords):
+        """
+        Convert Cartesian coordinates to fractional coordinates.
+        
+        Args:
+            cart_coords: Cartesian coordinates (3,) or (N, 3)
+        
+        Returns:
+            Fractional coordinates
+        """
+        return np.linalg.solve(self.vectors.T, cart_coords.T).T
+    
+    def frac_to_cart(self, frac_coords):
+        """
+        Convert fractional coordinates to Cartesian coordinates.
+        
+        Args:
+            frac_coords: Fractional coordinates (3,) or (N, 3)
+        
+        Returns:
+            Cartesian coordinates
+        """
+        frac_coords = np.asarray(frac_coords)
+        return frac_coords @ self.vectors
+    
+    def __repr__(self):
+        return (f"Lattice(\n"
+                f"  a = {self.vectors[0]},\n"
+                f"  b = {self.vectors[1]},\n"
+                f"  c = {self.vectors[2]},\n"
+                f"  volume = {self.volume:.6f})")
