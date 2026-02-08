@@ -14,6 +14,7 @@ from .hartree import compute_hartree_potential, compute_hartree_energy
 from .hamiltonian import Hamiltonian, g_to_r
 from .eigensolver import PCGEigensolver, random_initial_guess
 from .mixing import LinearMixer, BroydenMixer
+from .smearing import create_smearing, find_fermi_level
 
 
 def generate_monkhorst_pack(nk1, nk2, nk3, shift=(0.0, 0.0, 0.0)):
@@ -22,19 +23,27 @@ def generate_monkhorst_pack(nk1, nk2, nk3, shift=(0.0, 0.0, 0.0)):
     
     Args:
         nk1, nk2, nk3: Number of k-points along each reciprocal lattice direction
-        shift: Optional shift (0.5, 0.5, 0.5) for shifted grids
+        shift: Optional grid shift per direction. A Rust/spglib-style convention
+               is used here: 0.0 means Gamma-centered, 1.0 means half-grid shift.
         
     Returns:
         kpoints_frac: Array of fractional k-points (nk, 3)
         weights: Array of k-point weights (nk,)
     """
+    shift = np.asarray(shift, dtype=float)
     kpoints = []
     for i in range(nk1):
         for j in range(nk2):
             for k in range(nk3):
-                kx = (2*i - nk1 + 1) / (2*nk1) + shift[0] / nk1
-                ky = (2*j - nk2 + 1) / (2*nk2) + shift[1] / nk2
-                kz = (2*k - nk3 + 1) / (2*nk3) + shift[2] / nk3
+                # Match Rust/spglib mesh semantics:
+                # shift=0.0 -> Gamma-centered mesh (e.g., 2x2x2 gives 0.0/0.5)
+                # shift=1.0 -> half-grid shifted mesh (0.25/0.75 for 2x2x2)
+                kx = (i + 0.5 * shift[0]) / nk1
+                ky = (j + 0.5 * shift[1]) / nk2
+                kz = (k + 0.5 * shift[2]) / nk3
+                kx %= 1.0
+                ky %= 1.0
+                kz %= 1.0
                 kpoints.append([kx, ky, kz])
     
     kpoints = np.array(kpoints)
@@ -116,11 +125,11 @@ class KPointData:
         self.evals = None
         self.occupations = None
         
-        # |k+G|^2 for kinetic energy
+        # 0.5*|k+G|^2 kinetic energies
         self.kg_squared = None
         
-        # Beta projectors for this k-point
-        self.beta_kg = None
+        # Non-local projectors (precomputed for this k-point)
+        self.full_projectors = None
 
 
 class KPointSCF:
@@ -178,6 +187,10 @@ class KPointSCF:
         self._v_hartree_r = None
         self._v_xc_r = None
         self._exc_r = None
+
+        # Occupation metadata
+        self.fermi_level = None
+        self.smearing_name = None
         
         # Hamiltonian template
         self.hamiltonian = Hamiltonian(gvec, volume)
@@ -216,11 +229,11 @@ class KPointSCF:
             kdata.kg_squared = np.zeros(self.npw)
             for ig in range(self.npw):
                 kpg = k_cart + self.gvec.cart[ig]
-                kdata.kg_squared[ig] = np.sum(kpg**2)
+                kdata.kg_squared[ig] = 0.5 * np.sum(kpg**2)
             
-            # Compute beta projectors for this k-point
+            # Precompute non-local projectors for this k-point
             if self.nlpot is not None:
-                kdata.beta_kg = self.nlpot.get_beta_kg(k_cart)
+                kdata.full_projectors = self.nlpot.get_full_projectors(k_cart)
             
             # Initialize eigenvectors
             kdata.evecs = random_initial_guess(self.npw, self.n_bands)
@@ -266,8 +279,8 @@ class KPointSCF:
         hpsi = self.hamiltonian.apply(psi)
         
         # Non-local part
-        if self.nlpot is not None and kdata.beta_kg is not None:
-            hpsi += self.nlpot.apply_vnl(psi, kdata.beta_kg)
+        if self.nlpot is not None and kdata.full_projectors is not None:
+            hpsi += self.nlpot.apply_vnl(psi, kdata.full_projectors)
         
         return hpsi
     
@@ -315,17 +328,85 @@ class KPointSCF:
         
         return rho_r_new
     
-    def _set_occupations(self):
-        """
-        Set band occupations (fixed occupations for insulators).
-        
-        For metals, would use smearing and Fermi level search.
-        """
-        n_occ = self.n_electrons // 2
-        
+    def _sort_kpoint_eigensystems(self):
+        """Sort eigenvalues (ascending) and reorder eigenvectors consistently."""
         for kdata in self.kpoints:
-            kdata.occupations = np.zeros(self.n_bands)
-            kdata.occupations[:n_occ] = 2.0
+            order = np.argsort(kdata.evals)
+            kdata.evals = kdata.evals[order]
+            kdata.evecs = kdata.evecs[:, order]
+
+    def _update_occupations(self, smearing='fd', temperature=300.0, sigma=0.01):
+        """
+        Update occupations by global Fermi-level filling over all k-points.
+
+        This mirrors the Rust workflow more closely than fixed band-index filling and
+        avoids locking in an incorrect excited-state occupancy pattern.
+        """
+        if self.nk == 0:
+            raise RuntimeError("No k-points available to set occupations.")
+
+        evals = np.array([kdata.evals for kdata in self.kpoints], dtype=float)
+        weights = np.array([kdata.weight for kdata in self.kpoints], dtype=float)
+
+        smearing_key = str(smearing).lower()
+        if smearing_key == 'fixed':
+            # Zero-temperature global filling by ascending eigenvalues over all k-points.
+            occupations = np.zeros_like(evals)
+            state_list = []
+            for ik, kdata in enumerate(self.kpoints):
+                for ib in range(self.n_bands):
+                    state_list.append((kdata.evals[ib], ik, ib, kdata.weight))
+            state_list.sort(key=lambda item: item[0])
+
+            remaining = float(self.n_electrons)
+            fermi_level = state_list[-1][0] if state_list else 0.0
+            for energy, ik, ib, wk in state_list:
+                capacity = 2.0 * wk
+                if remaining <= 1e-12:
+                    break
+                fill = min(capacity, remaining)
+                occupations[ik, ib] = fill / wk
+                remaining -= fill
+                fermi_level = energy
+
+            if remaining > 1e-8:
+                raise RuntimeError(
+                    "Not enough states in the current basis to place all electrons."
+                )
+
+            for ik, kdata in enumerate(self.kpoints):
+                kdata.occupations = occupations[ik]
+
+            self.fermi_level = fermi_level
+            self.smearing_name = "Fixed (global filling)"
+            return
+
+        smearing_obj = create_smearing(smearing, temperature=temperature, sigma=sigma)
+        fermi_level, occupations = find_fermi_level(
+            eigenvalues=evals,
+            weights=weights,
+            n_electrons=self.n_electrons,
+            smearing=smearing_obj,
+            spin_factor=2.0,
+        )
+
+        for ik, kdata in enumerate(self.kpoints):
+            kdata.occupations = occupations[ik]
+
+        self.fermi_level = fermi_level
+        self.smearing_name = smearing_obj.name
+
+    def _validate_total_charge(self, tol=1e-8):
+        """Sanity-check that occupations reproduce the requested electron count."""
+        n_from_occ = 0.0
+        for kdata in self.kpoints:
+            n_from_occ += kdata.weight * np.sum(kdata.occupations)
+
+        if abs(n_from_occ - self.n_electrons) > tol:
+            raise RuntimeError(
+                f"Occupation mismatch: got {n_from_occ:.10f} electrons, "
+                f"expected {self.n_electrons:.10f}"
+            )
     
     def _compute_band_energy(self):
         """Compute total band energy sum_k w_k sum_n f_nk e_nk."""
@@ -358,7 +439,16 @@ class KPointSCF:
         arr_fft = self.gvec.map_to_fft_grid(arr_g, self.fft_shape)
         return np.real(np.fft.ifftn(arr_fft) * self.n_fft)
     
-    def run(self, max_iter=60, tol=1e-6, mixing_alpha=0.2, verbose=True):
+    def run(
+        self,
+        max_iter=60,
+        tol=1e-6,
+        mixing_alpha=0.2,
+        verbose=True,
+        smearing='fd',
+        temperature=300.0,
+        sigma=0.01,
+    ):
         """
         Run SCF calculation with k-point sampling.
         
@@ -367,6 +457,9 @@ class KPointSCF:
             tol: Energy convergence tolerance
             mixing_alpha: Density mixing parameter
             verbose: Print progress
+            smearing: Occupation scheme ('fd', 'gaussian', 'mp', 'fixed', ...)
+            temperature: Electronic temperature (K) used by FD smearing
+            sigma: Smearing width (Ha) for Gaussian/MP schemes
             
         Returns:
             Total energy in Hartree
@@ -387,8 +480,9 @@ class KPointSCF:
         self.rho_r = np.full(self.fft_shape, rho_0, dtype=float)
         self.rho_g = self._r_to_g(self.rho_r)
         
-        # Set fixed occupations
-        self._set_occupations()
+        # Set initial occupations from a global Fermi level.
+        self._update_occupations(smearing=smearing, temperature=temperature, sigma=sigma)
+        self._validate_total_charge()
         
         # Mixer
         mixer = LinearMixer(alpha=mixing_alpha)
@@ -407,6 +501,11 @@ class KPointSCF:
             # Solve eigenvalue problem at each k-point
             for kdata in self.kpoints:
                 self._solve_eigenvalue(kdata)
+
+            # Keep k-point eigensystems ordered and update occupations consistently.
+            self._sort_kpoint_eigensystems()
+            self._update_occupations(smearing=smearing, temperature=temperature, sigma=sigma)
+            self._validate_total_charge()
             
             # Compute new density
             rho_r_new = self._compute_density()
@@ -463,6 +562,11 @@ class KPointSCF:
         print(f"\nTotal energy: {self.total_energy:.8f} Ha "
               f"({self.total_energy * HA_TO_EV:.6f} eV)")
         print(f"Ewald energy: {self.ewald_energy:.8f} Ha")
+        if self.fermi_level is not None:
+            print(f"Fermi level: {self.fermi_level:.8f} Ha "
+                  f"({self.fermi_level * HA_TO_EV:.6f} eV)")
+        if self.smearing_name is not None:
+            print(f"Occupation scheme: {self.smearing_name}")
         
         print(f"\nEigenvalues at each k-point:")
         for ik, kdata in enumerate(self.kpoints):

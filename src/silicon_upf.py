@@ -31,10 +31,22 @@ from src.kpoint_scf import KPointSCF
 
 def find_upf_file():
     """Find the Si UPF file in the project."""
+    src_dir = os.path.dirname(__file__)
+    pydft_dir = os.path.dirname(src_dir)
+    dftworks_parent = os.path.dirname(pydft_dir)
+    
     possible_paths = [
-        os.path.join(os.path.dirname(__file__), '..', '..', 'test_example', 
+        # Local pot/ directory (standalone pydft)
+        os.path.join(pydft_dir, 'pot', 'Si-sr.upf'),
+        # Sibling dftworks directory
+        os.path.join(dftworks_parent, 'dftworks', 'test_example', 
                      'si-oncv', 'scf', 'pot', 'Si-sr.upf'),
-        os.path.join(os.path.dirname(__file__), '..', '..', 'atompsp', 
+        os.path.join(dftworks_parent, 'dftworks', 'atompsp', 
+                     'src', 'Si-sr.upf'),
+        # Legacy paths (pydft inside dftworks)
+        os.path.join(src_dir, '..', '..', 'test_example', 
+                     'si-oncv', 'scf', 'pot', 'Si-sr.upf'),
+        os.path.join(src_dir, '..', '..', 'atompsp', 
                      'src', 'Si-sr.upf'),
     ]
     
@@ -42,7 +54,10 @@ def find_upf_file():
         if os.path.exists(path):
             return os.path.abspath(path)
     
-    raise FileNotFoundError("Could not find Si-sr.upf pseudopotential file")
+    raise FileNotFoundError(
+        "Could not find Si-sr.upf pseudopotential file. "
+        "Please place it in pot/Si-sr.upf or ensure dftworks is a sibling directory."
+    )
 
 
 class SiliconUPF:
@@ -125,15 +140,24 @@ class SiliconUPF:
         self.evecs = None
         self.evals = None
     
-    def _apply_vnl(self, psi_g, beta_kg=None):
+    def _apply_vnl(self, psi_g, full_projectors=None):
         """
         Apply non-local potential to wavefunction.
         
         Uses the NonlocalPotential class for the calculation.
         """
-        return self.nlpot.apply_vnl(psi_g, beta_kg)
+        return self.nlpot.apply_vnl(psi_g, full_projectors)
     
-    def run_scf(self, max_iter=60, tol=1e-6, kmesh=None):
+    def run_scf(
+        self,
+        max_iter=60,
+        tol=1e-6,
+        kmesh=None,
+        kshift=(0.0, 0.0, 0.0),
+        occupation_scheme='fd',
+        electronic_temperature=300.0,
+        smearing_sigma=0.01,
+    ):
         """
         Run SCF calculation.
         
@@ -142,16 +166,37 @@ class SiliconUPF:
             tol: Energy convergence tolerance
             kmesh: K-point mesh as tuple (nk1, nk2, nk3). 
                    If None, uses Gamma-only calculation.
+            kshift: Monkhorst-Pack shift (fractional units per direction)
+            occupation_scheme: Smearing/occupation scheme ('fd', 'fixed', ...)
+            electronic_temperature: Temperature (K) for Fermi-Dirac smearing
+            smearing_sigma: Smearing width (Ha) for Gaussian/MP schemes
                    
         Returns:
             Total energy in Hartree
         """
         if kmesh is not None:
-            return self._run_scf_kpoints(max_iter, tol, kmesh)
+            return self._run_scf_kpoints(
+                max_iter,
+                tol,
+                kmesh,
+                kshift,
+                occupation_scheme,
+                electronic_temperature,
+                smearing_sigma,
+            )
         else:
             return self._run_scf_gamma(max_iter, tol)
     
-    def _run_scf_kpoints(self, max_iter, tol, kmesh):
+    def _run_scf_kpoints(
+        self,
+        max_iter,
+        tol,
+        kmesh,
+        kshift,
+        occupation_scheme,
+        electronic_temperature,
+        smearing_sigma,
+    ):
         """Run SCF with k-point sampling using modular KPointSCF."""
         print("\n" + "-" * 70)
         print("SCF Calculation with K-point Sampling")
@@ -170,15 +215,29 @@ class SiliconUPF:
         )
         
         # Set up k-points
-        self.kscf.setup_kpoints(kmesh[0], kmesh[1], kmesh[2], use_symmetry=True)
+        self.kscf.setup_kpoints(
+            kmesh[0],
+            kmesh[1],
+            kmesh[2],
+            shift=kshift,
+            use_symmetry=True,
+        )
         
         # Run SCF
-        e_total = self.kscf.run(max_iter=max_iter, tol=tol, mixing_alpha=0.2)
+        e_total = self.kscf.run(
+            max_iter=max_iter,
+            tol=tol,
+            mixing_alpha=0.2,
+            smearing=occupation_scheme,
+            temperature=electronic_temperature,
+            sigma=smearing_sigma,
+        )
         
         # Store converged potential for band structure
         self.v_local_r = self.kscf.get_converged_potential()
         self.rho_r = self.kscf.rho_r
         self.rho_g = self.kscf.rho_g
+        self.hamiltonian.set_local_potential(self.v_local_r)
         
         # Store eigenvalues from Gamma point (or first k-point) for compatibility
         self.evals = self.kscf.kpoints[0].evals
@@ -223,11 +282,12 @@ class SiliconUPF:
             self._build_potential()
             
             # Create custom Hamiltonian that includes non-local
+            full_projectors = self.nlpot.get_full_projectors(np.zeros(3))
             def ham_apply_with_vnl(psi):
                 # Local part (kinetic + local potential)
                 hpsi = self.hamiltonian.apply(psi)
                 # Add non-local
-                hpsi += self._apply_vnl(psi)
+                hpsi += self._apply_vnl(psi, full_projectors)
                 return hpsi
             
             # Solve eigenvalue problem
@@ -358,6 +418,8 @@ class SiliconUPF:
         if self.v_local_r is None:
             print("Running SCF first...")
             self.run_scf()
+        # Ensure the band Hamiltonian uses the converged SCF local potential.
+        self.hamiltonian.set_local_potential(self.v_local_r)
         
         # High-symmetry points for FCC
         hs_points = {
@@ -420,21 +482,21 @@ class SiliconUPF:
             
             k = k_cart[ik]
             
-            # Update |k+G|^2 for this k-point
+            # Update 0.5*|k+G|^2 for this k-point
             kg = np.zeros(self.npw)
             for ig in range(self.npw):
                 kpg = k + self.gvec.cart[ig]
-                kg[ig] = np.sum(kpg**2)
+                kg[ig] = 0.5 * np.sum(kpg**2)
             
             self.hamiltonian.kg = kg
             
-            # Recompute beta(|k+G|) for this k-point using NonlocalPotential
-            beta_kg_k = self.nlpot.get_beta_kg(k)
+            # Precompute non-local projectors for this k-point
+            full_projectors_k = self.nlpot.get_full_projectors(k)
             
             # Hamiltonian with k-dependent non-local
-            def ham_apply_k(psi, beta_kg=beta_kg_k):
+            def ham_apply_k(psi, full_projectors=full_projectors_k):
                 hpsi = self.hamiltonian.apply(psi)
-                hpsi += self._apply_vnl(psi, beta_kg)
+                hpsi += self._apply_vnl(psi, full_projectors)
                 return hpsi
             
             # Solve with tighter convergence for smooth bands

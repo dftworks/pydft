@@ -6,12 +6,64 @@ This module provides classes to compute local and non-local pseudopotential
 contributions in G-space from UPF files.
 
 The Kleinman-Bylander separable form is used for the non-local potential:
-    V_nl |psi> = sum_i D_ii |beta_i> <beta_i|psi>
+    V_nl |psi> = sum_{lm} sum_atoms D_l |beta_lm> <beta_lm|psi>
+    
+where beta_lm(G) = beta_l(|k+G|) * Y_lm(k+G)
 """
 
 import numpy as np
+from scipy.special import sph_harm_y
 from .constants import TWOPI
 from .upf_reader import UPFPseudopotential
+
+
+def real_spherical_harmonic(l, m, x, y, z):
+    """
+    Compute real spherical harmonic Y_lm at direction (x, y, z).
+    Handles both scalar and array inputs.
+    """
+    x = np.atleast_1d(x)
+    y = np.atleast_1d(y)
+    z = np.atleast_1d(z)
+    
+    r = np.sqrt(x*x + y*y + z*z)
+    
+    # Avoid division by zero
+    r_safe = np.where(r < 1e-15, 1.0, r)
+    
+    theta = np.arccos(z / r_safe)
+    phi = np.arctan2(y, x)
+    phi = np.where(phi < 0, phi + 2 * np.pi, phi)
+    
+    if m == 0:
+        ylm = sph_harm_y(l, 0, theta, phi)
+        res = np.real(ylm)
+    elif m > 0:
+        ylm_pos = sph_harm_y(l, m, theta, phi)
+        ylm_neg = sph_harm_y(l, -m, theta, phi)
+        res = np.real((ylm_pos + ((-1)**m) * ylm_neg) / np.sqrt(2))
+    else:
+        # Sine combination (m < 0)
+        ylm_pos = sph_harm_y(l, -m, theta, phi)
+        ylm_neg = sph_harm_y(l, m, theta, phi)
+        res = np.real((ylm_pos - ((-1)**(-m)) * ylm_neg) / (1j * np.sqrt(2)))
+        
+    # Handle the origin
+    if l == 0:
+        res = np.where(r < 1e-15, 1.0 / np.sqrt(4 * np.pi), res)
+    else:
+        res = np.where(r < 1e-15, 0.0, res)
+        
+    return res if len(res) > 1 else res[0]
+
+
+def compute_ylm_for_kg(l, m, kg_cart):
+    """
+    Compute real spherical harmonic Y_lm for an array of k+G vectors.
+    """
+    return real_spherical_harmonic(l, m, kg_cart[:, 0], kg_cart[:, 1], kg_cart[:, 2])
+
+
 
 
 class NonlocalPotential:
@@ -120,36 +172,56 @@ class NonlocalPotential:
             phases[ig] = np.exp(1j * phase)
         return phases
     
-    def apply_vnl(self, psi_g, beta_kg=None):
+    def get_full_projectors(self, k_cart):
         """
-        Apply non-local potential to wavefunction.
-        
-        V_nl |psi> = sum_{atoms} sum_i D_ii |beta_i> <beta_i|psi>
+        Precompute all beta_lm(k+G) * structure_factor(G) projectors for a k-point.
         
         Args:
-            psi_g: Wavefunction in G-space (npw,)
-            beta_kg: Optional k-dependent beta projectors. If None, uses Gamma-point values.
+            k_cart: k-vector in Cartesian coordinates (3,)
             
         Returns:
-            V_nl |psi> in G-space
+            List of tuples (projector_g, d_ii) for all lm and all atoms.
         """
-        if beta_kg is None:
-            beta_kg = self.beta_g
-            
-        vnl_psi = np.zeros_like(psi_g)
+        beta_radial, kg_cart = self.get_beta_kg(k_cart)
+        
+        full_projectors = []
         
         for atom_pos in self.atom_positions:
             phases = self.compute_structure_factor_phases(atom_pos)
             
             for ibeta in range(self.psp.nbeta):
-                beta = beta_kg[ibeta]
+                l = self.psp.lbeta[ibeta]
                 d_ii = self.psp.get_dfact(ibeta)
+                beta_r = beta_radial[ibeta]
                 
-                # <beta|psi> with structure factor
-                proj = np.sum(np.conj(beta * phases) * psi_g)
-                
-                # |beta> D <beta|psi>
-                vnl_psi += d_ii * proj * beta * phases
+                for m in range(-l, l + 1):
+                    # Compute Y_lm for all G at once
+                    ylm = compute_ylm_for_kg(l, m, kg_cart)
+                    
+                    # beta_lm(G) = beta_l(|k+G|) * Y_lm(k+G)
+                    # Include structure factor phase
+                    proj_g = beta_r * ylm * phases
+                    
+                    full_projectors.append((proj_g, d_ii))
+                    
+        return full_projectors
+
+    def apply_vnl(self, psi_g, full_projectors=None, k_cart=None):
+        """
+        Apply non-local potential using (optionally) precomputed projectors.
+        """
+        if full_projectors is None:
+            if k_cart is None:
+                k_cart = np.zeros(3)
+            full_projectors = self.get_full_projectors(k_cart)
+            
+        vnl_psi = np.zeros_like(psi_g)
+        
+        for proj_g, d_ii in full_projectors:
+            # <beta_lm|psi>
+            proj = np.sum(np.conj(proj_g) * psi_g)
+            # |beta_lm> D <beta_lm|psi>
+            vnl_psi += d_ii * proj * proj_g
         
         return vnl_psi
     
@@ -161,15 +233,21 @@ class NonlocalPotential:
             k_cart: k-vector in Cartesian coordinates (3,)
             
         Returns:
-            List of beta projector arrays for this k-point
+            Tuple of (beta_kg, kg_cart):
+                beta_kg: List of beta projector arrays (radial part)
+                kg_cart: Array of k+G Cartesian vectors (npw, 3)
         """
-        # Compute |k+G| for all G-vectors
+        # Compute k+G for all G-vectors
+        kg_cart = np.zeros((self.npw, 3))
         kg_norms = np.zeros(self.npw)
+        
         for ig in range(self.npw):
             kpg = k_cart + self.gvec.cart[ig]
+            kg_cart[ig] = kpg
             kg_norms[ig] = np.linalg.norm(kpg)
         
-        return self._compute_beta_g(kg_norms)
+        beta_kg = self._compute_beta_g(kg_norms)
+        return beta_kg, kg_cart
     
     def apply_vnl_k(self, psi_g, k_cart):
         """
@@ -182,8 +260,8 @@ class NonlocalPotential:
         Returns:
             V_nl |psi> in G-space
         """
-        beta_kg = self.get_beta_kg(k_cart)
-        return self.apply_vnl(psi_g, beta_kg)
+        beta_kg, kg_cart = self.get_beta_kg(k_cart)
+        return self.apply_vnl(psi_g, beta_kg, kg_cart)
     
     @property
     def zion(self):
@@ -263,23 +341,31 @@ class PseudopotentialSet:
             vloc_total += nlpot.get_vloc_g()
         return vloc_total
     
-    def apply_vnl_all(self, psi_g, k_cart=None):
+    def get_all_full_projectors(self, k_cart):
+        """
+        Precompute all projectors for all species for a k-point.
+        """
+        all_projectors = []
+        for nlpot in self.nonlocal_pots.values():
+            all_projectors.extend(nlpot.get_full_projectors(k_cart))
+        return all_projectors
+
+    def apply_vnl_all(self, psi_g, full_projectors=None, k_cart=None):
         """
         Apply non-local potential from all atoms.
-        
-        Args:
-            psi_g: Wavefunction in G-space
-            k_cart: Optional k-vector (uses Gamma if None)
-            
-        Returns:
-            V_nl |psi> in G-space
         """
-        vnl_psi = np.zeros_like(psi_g)
-        for nlpot in self.nonlocal_pots.values():
+        if full_projectors is None:
+            # Fallback to computing on the fly or using k_cart
             if k_cart is None:
-                vnl_psi += nlpot.apply_vnl(psi_g)
-            else:
-                vnl_psi += nlpot.apply_vnl_k(psi_g, k_cart)
+                k_cart = np.zeros(3)
+            full_projectors = self.get_all_full_projectors(k_cart)
+            
+        vnl_psi = np.zeros_like(psi_g)
+        
+        for proj_g, d_ii in full_projectors:
+            proj = np.sum(np.conj(proj_g) * psi_g)
+            vnl_psi += d_ii * proj * proj_g
+            
         return vnl_psi
     
     def get_total_valence_electrons(self):
