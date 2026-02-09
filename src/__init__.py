@@ -55,7 +55,6 @@ from .pseudopotential import (
     AtomicSpecies,
     SimplePseudopotential,
     LocalPotential,
-    NonLocalPotential as SimpleNonLocalPotential,
     compute_local_potential_g,
     create_jellium_potential,
     create_harmonic_potential,
