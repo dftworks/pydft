@@ -225,7 +225,7 @@ class KPointSCF:
             
             kdata = KPointData(k_frac, k_cart, weights[ik], self.npw, self.n_bands)
             
-            # Compute |k+G|^2
+            # Compute 0.5*|k+G|^2 kinetic term.
             kdata.kg_squared = np.zeros(self.npw)
             for ig in range(self.npw):
                 kpg = k_cart + self.gvec.cart[ig]

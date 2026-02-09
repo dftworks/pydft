@@ -71,7 +71,7 @@ class KPoints:
         
         k_points = np.array(k_points)
         
-        # All points have equal weight for now
+        # Equal weights because this helper does not reduce by symmetry.
         nk = len(k_points)
         weights = np.ones(nk) / nk
         

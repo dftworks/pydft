@@ -1,13 +1,11 @@
 """
-Pseudopotential Handling for Plane-Wave DFT.
+Local pseudopotential helpers for plane-wave DFT.
 
-Implements norm-conserving pseudopotentials in the Kleinman-Bylander
-separable form. Supports reading UPF (Unified Pseudopotential Format)
-files for basic calculations.
-
-This is a simplified educational implementation that handles:
-- Local potential: V_loc(r) in real space, transformed to V_loc(G)
-- Non-local potential: Kleinman-Bylander projectors beta_l(r)
+This module focuses on local ionic potentials used in educational and
+toy-system workflows:
+- radial local potential transforms V_loc(r) -> V_loc(G)
+- simple analytic model potentials
+- structure-factor assembly over atoms in the unit cell
 
 References:
     - Kleinman, L. & Bylander, D. M. Phys. Rev. Lett. 48, 1425 (1982)
@@ -15,9 +13,9 @@ References:
 """
 
 import numpy as np
-from scipy.special import spherical_jn, erf
+from scipy.special import erf
 from scipy.integrate import simpson
-from .constants import PI, TWOPI, FOURPI
+from .constants import TWOPI, FOURPI
 
 
 class LocalPotential:
@@ -95,8 +93,8 @@ class SimplePseudopotential:
     """
     Simple pseudopotential for educational purposes.
     
-    Uses analytical forms for V_loc and simple projectors,
-    suitable for testing without reading UPF files.
+    Uses an analytical local potential form suitable for tests and
+    examples that do not rely on UPF files.
     """
     
     def __init__(self, zion, r_loc=1.0, alpha=1.0):
@@ -136,8 +134,8 @@ class AtomicSpecies:
         symbol: Element symbol (e.g., 'Si')
         zion: Ionic charge
         mass: Atomic mass (optional)
-        vloc: Local potential
-        vnl: Non-local potential (optional)
+        psp: Local potential model object
+        has_nonlocal: Whether a non-local model is attached
     """
     
     def __init__(self, symbol, zion, mass=None):

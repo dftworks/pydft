@@ -4,7 +4,7 @@ Hamiltonian application: H|psi>.
 The Kohn-Sham Hamiltonian consists of:
 - Kinetic energy: T = -1/2 * nabla^2
 - Local potential: V_loc = V_H + V_xc + V_ps_loc
-- Non-local potential: V_nl (not implemented in this simplified version)
+- Non-local potential: V_nl (applied externally by caller-specific wrappers)
 """
 
 import numpy as np
@@ -35,7 +35,7 @@ class Hamiltonian:
         self.fft_shape = gvec.get_fft_grid_size()
         self.n_fft = np.prod(self.fft_shape)
         
-        # Kinetic energies (for Gamma point)
+        # Default kinetic term for Gamma; callers can overwrite self.kg for k != 0.
         self.kg = 0.5 * np.sum(gvec.cart**2, axis=1)
         
         # Local potential in real space (set later)

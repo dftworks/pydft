@@ -67,11 +67,11 @@ class SCFSolver:
         # Hamiltonian
         self.hamiltonian = Hamiltonian(self.gvec, self.volume)
         
-        # External potential (ion potential placeholder)
+        # External local potential term used by this pedagogical SCF driver.
         if external_potential is not None:
             self.v_ext = external_potential
         else:
-            # Default: harmonic potential for testing
+            # Default to a harmonic confining potential when none is provided.
             self.v_ext = self._create_harmonic_potential()
         
         # Eigensolver
@@ -94,7 +94,7 @@ class SCFSolver:
     
     def _create_harmonic_potential(self, omega=0.1):
         """
-        Create a harmonic confining potential for testing.
+        Create the default harmonic confining potential.
         
         V(r) = 0.5 * omega^2 * |r - r_center|^2
         """

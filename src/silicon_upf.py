@@ -130,7 +130,7 @@ class SiliconUPF:
         self.ewald = Ewald(self.lattice, self.atom_positions, charges, self.gvec)
         print(f"\nEwald energy: {self.ewald.energy:.6f} Ha")
         
-        # Hamiltonian (will add non-local later)
+        # Local (kinetic + local-potential) Hamiltonian part; V_nl is added in wrappers.
         self.hamiltonian = Hamiltonian(self.gvec, self.volume)
         
         # Storage
@@ -239,7 +239,7 @@ class SiliconUPF:
         self.rho_g = self.kscf.rho_g
         self.hamiltonian.set_local_potential(self.v_local_r)
         
-        # Store eigenvalues from Gamma point (or first k-point) for compatibility
+        # Keep first-kpoint eigensystem for plotting/reporting helpers.
         self.evals = self.kscf.kpoints[0].evals
         self.evecs = self.kscf.kpoints[0].evecs
         
@@ -249,7 +249,7 @@ class SiliconUPF:
         return e_total
     
     def _run_scf_gamma(self, max_iter, tol):
-        """Run Gamma-only SCF calculation (original implementation)."""
+        """Run the Gamma-only SCF path."""
         print("\n" + "-" * 70)
         print("SCF Calculation (Gamma-only)")
         print("-" * 70)

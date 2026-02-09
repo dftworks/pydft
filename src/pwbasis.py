@@ -51,7 +51,7 @@ class PWBasis:
         return self.npw
     
     def get_gindex(self):
-        """Return G-vector indices (identity for now)."""
+        """Return indices in the shared G-vector list."""
         return np.arange(self.npw)
     
     def __repr__(self):

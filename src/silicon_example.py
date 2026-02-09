@@ -192,10 +192,10 @@ class SiliconSCF:
         from src.mixing import LinearMixer
         self.mixer = LinearMixer(alpha=0.3)
         
-        # Smearing (use Gaussian for metals/semiconductors)
+        # Smearing helper kept for optional workflows; current run uses fixed occupations.
         self.smearing = create_smearing('gaussian', sigma=0.01)
         
-        # Storage (for Gamma-only simplified version)
+        # Storage used by the current single-k SCF path.
         self.evecs = None
         self.evals = None
         self.rho_r = None
