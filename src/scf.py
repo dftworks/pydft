@@ -335,8 +335,9 @@ class SCFSolver:
         
         E_tot = E_band - E_H + E_xc - E_Vxc
         
-        (In real DFT, there would also be ion-ion Ewald energy and
-        pseudopotential contributions.)
+        This base-class implementation covers the pedagogical jellium /
+        harmonic-well case.  The UPF-enabled SCF solver (see silicon_upf.py)
+        adds ion-ion Ewald and pseudopotential energy terms.
         """
         # Band energy: sum of occupied eigenvalues
         e_band = np.sum(self.occupations * self.evals)

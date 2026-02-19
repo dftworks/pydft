@@ -28,6 +28,22 @@ class NonlocalPotential:
     """
     Handles non-local pseudopotential calculations for a periodic system.
     
+    The Kleinman-Bylander separable form factors the non-local potential
+    into radial beta projectors and angular/structural parts:
+    
+        V_nl |psi> = sum_{atom} sum_{l,m} D_l |beta_lm> <beta_lm|psi>
+    
+    The pipeline from UPF data to a full projector ready for use is:
+    
+        1. ``_compute_beta_g(|k+G|)`` — Spherical Bessel transform of the
+           radial beta_l(r) from the UPF file.  Produces beta_l(|k+G|),
+           which depends only on the *magnitude* of k+G.
+    
+        2. ``get_full_projectors(k)`` — Multiplies the radial part by the
+           real spherical harmonic Y_lm(k+G_hat) and the per-atom structure
+           factor exp(i G . tau_atom).  The result is the complete
+           projector beta_lm(k+G) ready for inner products with psi(G).
+    
     This class computes:
     - Local potential V_loc(G) from UPF data
     - Non-local projectors beta(|k+G|) in reciprocal space

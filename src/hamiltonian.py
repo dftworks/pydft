@@ -79,28 +79,33 @@ class Hamiltonian:
     
     def _apply_vloc(self, psi_g):
         """
-        Apply local potential via FFT.
+        Apply local potential via FFT (mixed-space method).
         
         1. Map psi(G) to FFT grid
         2. IFFT to get psi(r)
         3. Multiply: V_loc(r) * psi(r)
         4. FFT to get (V_loc * psi)(G)
         5. Map back to G-vector list
+        
+        FFT normalization note:
+            NumPy's ifftn divides by N (the total number of grid points),
+            so ifftn(x) = (1/N) * sum_G x(G) e^{iGr}.  We want the plain
+            DFT sum (no 1/N), so we multiply by n_fft after ifftn and
+            divide by n_fft after fftn.  The sqrt(volume) factors convert
+            between the physics plane-wave normalization and the FFT grid.
         """
         # Map to FFT grid
         self._work_g.fill(0)
         self._map_to_fft(psi_g, self._work_g)
         
-        # IFFT: G -> r.
-        # The explicit n_fft factor keeps this transform pair consistent with
-        # the normalization used in g_to_r / r_to_g below.
+        # IFFT: G -> r.  Multiply by n_fft to undo NumPy's built-in 1/N.
         self._work_r = np.fft.ifftn(self._work_g) * self.n_fft
         
         # Multiply in real space: V_loc(r) * psi(r)
         # Normalize by sqrt(volume) for proper normalization
         self._work_r *= self.vloc_r / np.sqrt(self.volume)
         
-        # FFT: r -> G (inverse scaling of the IFFT line above).
+        # FFT: r -> G.  Divide by n_fft (inverse of the ifftn scaling above).
         self._work_g = np.fft.fftn(self._work_r) / self.n_fft
         
         # Map back to G-vector list
@@ -109,7 +114,12 @@ class Hamiltonian:
         return vloc_psi_g * np.sqrt(self.volume)
     
     def _map_to_fft(self, data_g, grid):
-        """Map 1D G-space data to 3D FFT grid."""
+        """
+        Map 1D G-space data to 3D FFT grid.
+        
+        Uses an explicit loop over G-vectors for pedagogical clarity.
+        A production code would use vectorised fancy indexing for speed.
+        """
         n1, n2, n3 = self.fft_shape
         for ig, (m1, m2, m3) in enumerate(self.gvec.miller):
             i1 = m1 % n1
@@ -118,7 +128,11 @@ class Hamiltonian:
             grid[i1, i2, i3] = data_g[ig]
     
     def _map_from_fft(self, grid):
-        """Extract 1D G-space data from 3D FFT grid."""
+        """
+        Extract 1D G-space data from 3D FFT grid.
+        
+        Mirrors _map_to_fft; also uses an explicit loop for clarity.
+        """
         n1, n2, n3 = self.fft_shape
         data_g = np.zeros(self.gvec.npw, dtype=complex)
         for ig, (m1, m2, m3) in enumerate(self.gvec.miller):
