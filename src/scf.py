@@ -1,17 +1,25 @@
 """
 Self-Consistent Field (SCF) driver.
 
-Orchestrates the iterative solution of the Kohn-Sham equations.
+This module implements a minimal Gamma-point Kohn-Sham cycle:
+    1. rho -> V_eff (Hartree + XC + external)
+    2. solve H psi = eps psi
+    3. psi -> rho_new
+    4. mix rho and rho_new
+    5. check energy convergence
+
+The code is intentionally explicit (not heavily abstracted) so students can
+trace how each DFT equation maps to concrete arrays.
 """
 
 import numpy as np
-from .constants import HA_TO_EV, FOURPI
+from .constants import HA_TO_EV
 from .lattice import Lattice
 from .gvector import GVector
 from .pwbasis import PWBasis
 from .xc import lda_xc, compute_xc_energy, compute_xc_potential_energy
 from .hartree import compute_hartree_potential, compute_hartree_energy
-from .hamiltonian import Hamiltonian, g_to_r, r_to_g
+from .hamiltonian import Hamiltonian, g_to_r
 from .eigensolver import PCGEigensolver, random_initial_guess
 from .mixing import BroydenMixer, LinearMixer
 
@@ -83,7 +91,7 @@ class SCFSolver:
         else:
             self.mixer = LinearMixer(alpha=0.3)
         
-        # Occupations (simple filling)
+        # Occupations use a simple aufbau-like filling with spin pairing.
         self.occupations = self._compute_occupations()
         
         # Storage
@@ -126,7 +134,13 @@ class SCFSolver:
         return 0.5 * omega**2 * r2
     
     def _compute_occupations(self):
-        """Compute occupation numbers (simple filling)."""
+        """
+        Compute occupation numbers by filling the lowest bands.
+
+        Convention in this module:
+        - each spatial orbital can host up to 2 electrons (spin-paired),
+        - occupations are therefore in [0, 2].
+        """
         occ = np.zeros(self.n_bands)
         n_filled = self.n_electrons // 2  # Assuming spin-paired
         remainder = self.n_electrons % 2
@@ -163,10 +177,10 @@ class SCFSolver:
             print(f"  Electrons: {self.n_electrons}")
             print("-" * 60)
         
-        # Initialize density (uniform)
+        # Phase 0: start from a neutral uniform density.
         self._initialize_density()
         
-        # Initialize eigenvectors
+        # Random but orthonormal initial orbitals.
         self.evecs = random_initial_guess(self.npw, self.n_bands)
         self.evals = np.zeros(self.n_bands)
         
@@ -179,10 +193,10 @@ class SCFSolver:
             print("-" * 60)
         
         for scf_iter in range(1, max_iter + 1):
-            # Build potentials
+            # Phase 1: rho -> V_eff
             self._build_potential()
             
-            # Solve eigenvalue problem
+            # Phase 2: solve Kohn-Sham eigenproblem in current potential.
             self.eigensolver.solve(
                 ham_apply=self.hamiltonian.apply,
                 ham_diag=self.hamiltonian.get_diagonal(),
@@ -192,10 +206,10 @@ class SCFSolver:
                 max_iter=50
             )
             
-            # Compute new density
-            rho_new = self._compute_density()
+            # Phase 3: build rho_new from occupied orbitals.
+            rho_g_new = self._compute_density()
             
-            # Compute total energy
+            # Evaluate the Harris-Foulkes-like total energy expression.
             energy = self._compute_total_energy()
             
             # Check convergence
@@ -211,11 +225,11 @@ class SCFSolver:
                     print(f"SCF converged in {scf_iter} iterations")
                 break
             
-            # Mix densities
-            rho_mixed = self.mixer.mix(self.rho_g, rho_new)
+            # Phase 4: mix old/new densities to damp fixed-point oscillations.
+            rho_mixed = self.mixer.mix(self.rho_g, rho_g_new)
             self.rho_g = rho_mixed
             
-            # Update real-space density
+            # Keep real-space and reciprocal-space densities in sync.
             self.rho_r = self._g_to_r_density(self.rho_g)
             
             energy_old = energy
@@ -237,7 +251,7 @@ class SCFSolver:
     
     def _initialize_density(self):
         """Initialize electron density (uniform)."""
-        # Uniform density
+        # Uniform density integrates to n_electrons by construction.
         rho_0 = self.n_electrons / self.volume
         
         # Real-space density
@@ -248,7 +262,7 @@ class SCFSolver:
     
     def _r_to_g_density(self, rho_r):
         """Transform density from real space to G-space."""
-        # FFT
+        # NumPy FFT is unnormalized; divide by N to represent Fourier coefficients.
         rho_fft = np.fft.fftn(rho_r) / self.n_fft
         
         # Map to G-vector list
@@ -261,21 +275,21 @@ class SCFSolver:
         # Map to FFT grid
         rho_fft = self.gvec.map_to_fft_grid(rho_g, self.fft_shape)
         
-        # IFFT
+        # Inverse of the scaling used in _r_to_g_density.
         rho_r = np.fft.ifftn(rho_fft) * self.n_fft
         
         return np.real(rho_r)
     
     def _build_potential(self):
         """Build effective potential V_eff = V_H + V_xc + V_ext."""
-        # Hartree potential in G-space
+        # Hartree is naturally computed in reciprocal space.
         v_hartree_g = compute_hartree_potential(self.rho_g, self.gvec.norms)
         
-        # XC potential in real space
+        # XC is local in real space for LDA.
         rho_real = np.maximum(np.real(self.rho_r), 1e-20)
         v_xc_r, self._exc_r = lda_xc(rho_real)
         
-        # Transform Hartree to real space
+        # Transform Hartree back to the real-space grid for H application.
         v_hartree_fft = self.gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
         v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
         
@@ -290,7 +304,12 @@ class SCFSolver:
         self.hamiltonian.set_local_potential(v_local_r)
     
     def _compute_density(self):
-        """Compute new density from wavefunctions."""
+        """
+        Compute updated density from occupied Kohn-Sham orbitals.
+
+        Returns:
+            rho_g: Density in reciprocal space, matching mixer input.
+        """
         # Real-space density
         rho_r = np.zeros(self.fft_shape, dtype=float)
         
@@ -298,14 +317,14 @@ class SCFSolver:
             if self.occupations[i] < 1e-10:
                 continue
             
-            # Transform wavefunction to real space
+            # Build |psi_n(r)|^2 on the FFT grid.
             psi_r = g_to_r(self.evecs[:, i], self.gvec, 
                           self.fft_shape, self.volume)
             
             # Add to density
             rho_r += self.occupations[i] * np.abs(psi_r)**2
         
-        # Transform to G-space
+        # Mixer and Hartree routines work with rho(G).
         rho_g = self._r_to_g_density(rho_r)
         
         return rho_g
@@ -333,7 +352,8 @@ class SCFSolver:
         e_vxc = compute_xc_potential_energy(rho_real, self._v_xc_r, 
                                             self.volume, self.n_fft)
         
-        # External potential energy
+        # Diagnostic only: e_ext is already included implicitly in e_band.
+        # We keep this explicit term for teaching and consistency checks.
         e_ext = (self.volume / self.n_fft) * np.sum(rho_real * self.v_ext)
         
         # Total energy

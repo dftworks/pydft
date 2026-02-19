@@ -101,7 +101,7 @@ print(f"Ion-ion energy: {ewald.energy:.6f} Ha")
 ## Project Structure
 
 ```
-python_dft/
+pydft/
 ├── README.md           # This file
 ├── ALGORITHMS.md       # Detailed algorithm documentation
 ├── requirements.txt    # Python dependencies
@@ -126,6 +126,14 @@ python_dft/
     ├── scf.py          # SCF driver
     └── example.py      # Working examples
 ```
+
+### Suggested Reading Order (Code Layers)
+
+1. Geometry and basis: `lattice.py`, `crystal.py`, `gvector.py`, `pwbasis.py`
+2. Potentials and functionals: `hartree.py`, `xc.py`, `pseudopotential.py`
+3. Linear algebra core: `hamiltonian.py`, `eigensolver.py`
+4. SCF machinery: `density.py`, `mixing.py`, `smearing.py`, `scf.py`, `kpoint_scf.py`
+5. End-to-end examples: `example.py`, `silicon_example.py`, `silicon_upf.py`
 
 ## Modules
 
@@ -198,7 +206,7 @@ See [ALGORITHMS.md](ALGORITHMS.md) for detailed mathematical descriptions of:
 
 ```bash
 # See src/example.py for a complete working example
-cd python_dft
+cd pydft
 python -m src.example
 ```
 
@@ -246,7 +254,7 @@ This Python code is a simplified version of the algorithms in [dftworks](https:/
 
 ## License
 
-MIT License - See the main dftworks repository for details.
+This repository is licensed under the GNU General Public License v3.0 (GPL-3.0). See `LICENSE`.
 
 ## References
 

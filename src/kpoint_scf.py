@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """
-K-point Sampled SCF Solver for Plane-Wave DFT.
+K-point-sampled SCF solver for plane-wave DFT.
 
-This module provides a modular SCF solver that properly handles
-k-point sampling for periodic systems.
+Compared with `scf.py` (Gamma-point only), this module makes three
+periodic-system ingredients explicit:
+1. Brillouin-zone integration through weighted k-points,
+2. global occupation filling across all (k, band) states,
+3. optional non-local pseudopotential projectors at each k-point.
 """
 
 import numpy as np
-from .constants import HA_TO_EV, TWOPI
-from .gvector import GVector
+from .constants import HA_TO_EV
 from .xc import lda_xc, compute_xc_energy, compute_xc_potential_energy
 from .hartree import compute_hartree_potential, compute_hartree_energy
 from .hamiltonian import Hamiltonian, g_to_r
 from .eigensolver import PCGEigensolver, random_initial_guess
-from .mixing import LinearMixer, BroydenMixer
+from .mixing import LinearMixer
 from .smearing import create_smearing, find_fermi_level
 
 
@@ -174,7 +176,7 @@ class KPointSCF:
         # Reciprocal lattice vectors
         self.b = lattice.reciprocal_vectors
         
-        # K-point data
+        # K-point data (each entry stores its own eigenpairs/occupations).
         self.kpoints = []
         self.nk = 0
         
@@ -205,10 +207,10 @@ class KPointSCF:
             shift: Grid shift
             use_symmetry: Whether to reduce by time-reversal symmetry
         """
-        # Generate k-points
+        # Step 1: build full Monkhorst-Pack mesh.
         kpoints_frac, weights = generate_monkhorst_pack(nk1, nk2, nk3, shift)
         
-        # Reduce by symmetry
+        # Step 2: optionally reduce using time-reversal symmetry (k <-> -k).
         if use_symmetry:
             kpoints_frac, weights = reduce_kpoints_by_symmetry(kpoints_frac, weights)
         
@@ -225,7 +227,7 @@ class KPointSCF:
             
             kdata = KPointData(k_frac, k_cart, weights[ik], self.npw, self.n_bands)
             
-            # Compute 0.5*|k+G|^2 kinetic term.
+            # Kinetic diagonal 0.5*|k+G|^2 is k-dependent.
             kdata.kg_squared = np.zeros(self.npw)
             for ig in range(self.npw):
                 kpg = k_cart + self.gvec.cart[ig]
@@ -243,16 +245,16 @@ class KPointSCF:
     
     def _build_potential(self):
         """Build effective local potential from current density."""
-        # Hartree potential
+        # Hartree: rho(G) -> V_H(G) -> V_H(r)
         v_hartree_g = compute_hartree_potential(self.rho_g, self.gvec.norms)
         v_hartree_fft = self.gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
         self._v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
         
-        # XC potential
+        # XC: local functional in real space.
         rho_real = np.maximum(np.real(self.rho_r), 1e-20)
         self._v_xc_r, self._exc_r = lda_xc(rho_real)
         
-        # Local pseudopotential in real space
+        # Local ionic pseudopotential is provided in reciprocal space.
         vloc_fft = self.gvec.map_to_fft_grid(self.vloc_g, self.fft_shape)
         vloc_r = np.real(np.fft.ifftn(vloc_fft) * self.n_fft)
         
@@ -272,7 +274,7 @@ class KPointSCF:
         Returns:
             H|psi> in G-space
         """
-        # Set kinetic energy for this k-point
+        # Kinetic term depends on k and must be set before each H application.
         self.hamiltonian.kg = kdata.kg_squared
         
         # Local part (kinetic + local potential)
@@ -293,7 +295,7 @@ class KPointSCF:
             tol: Convergence tolerance
             max_iter: Maximum iterations
         """
-        # Set kinetic energy for this k-point
+        # Kinetic diagonal used by both H apply and the preconditioner.
         self.hamiltonian.kg = kdata.kg_squared
         
         def ham_apply(psi):
@@ -350,7 +352,8 @@ class KPointSCF:
 
         smearing_key = str(smearing).lower()
         if smearing_key == 'fixed':
-            # Zero-temperature global filling by ascending eigenvalues over all k-points.
+            # Zero-temperature filling by sorting all (k, band) levels globally.
+            # Capacity per state is 2*w_k electrons in spin-paired mode.
             occupations = np.zeros_like(evals)
             state_list = []
             for ik, kdata in enumerate(self.kpoints):
@@ -365,6 +368,7 @@ class KPointSCF:
                 if remaining <= 1e-12:
                     break
                 fill = min(capacity, remaining)
+                # Store occupation in [0, 2] convention (independent of weight).
                 occupations[ik, ib] = fill / wk
                 remaining -= fill
                 fermi_level = energy
@@ -381,6 +385,7 @@ class KPointSCF:
             self.smearing_name = "Fixed (global filling)"
             return
 
+        # Finite-temperature or analytic smearing path.
         smearing_obj = create_smearing(smearing, temperature=temperature, sigma=sigma)
         fermi_level, occupations = find_fermi_level(
             eigenvalues=evals,
@@ -416,7 +421,7 @@ class KPointSCF:
         return e_band
     
     def _compute_total_energy(self):
-        """Compute total energy."""
+        """Compute total energy with standard band-energy corrections."""
         e_band = self._compute_band_energy()
         
         e_hartree = compute_hartree_energy(self.rho_g, self.gvec.norms, self.volume)
@@ -475,7 +480,7 @@ class KPointSCF:
             print(f"Bands: {self.n_bands}")
             print(f"Electrons: {self.n_electrons}")
         
-        # Initialize density (uniform)
+        # Phase 0: start from a neutral uniform density.
         rho_0 = self.n_electrons / self.volume
         self.rho_r = np.full(self.fft_shape, rho_0, dtype=float)
         self.rho_g = self._r_to_g(self.rho_r)
@@ -484,7 +489,7 @@ class KPointSCF:
         self._update_occupations(smearing=smearing, temperature=temperature, sigma=sigma)
         self._validate_total_charge()
         
-        # Mixer
+        # Use linear mixing for predictable and easy-to-explain behavior.
         mixer = LinearMixer(alpha=mixing_alpha)
         
         energy_old = 0.0
@@ -495,26 +500,24 @@ class KPointSCF:
             print("-" * 35)
         
         for scf_iter in range(1, max_iter + 1):
-            # Build potential
+            # Phase 1: rho -> V_eff
             self._build_potential()
             
-            # Solve eigenvalue problem at each k-point
+            # Phase 2: solve eigenproblem independently at each k-point.
             for kdata in self.kpoints:
                 self._solve_eigenvalue(kdata)
 
-            # Keep k-point eigensystems ordered and update occupations consistently.
+            # Phase 3: reorder bands and refill occupations globally.
             self._sort_kpoint_eigensystems()
             self._update_occupations(smearing=smearing, temperature=temperature, sigma=sigma)
             self._validate_total_charge()
             
-            # Compute new density
+            # Phase 4: orbitals -> rho_new
             rho_r_new = self._compute_density()
             rho_g_new = self._r_to_g(rho_r_new)
             
-            # Compute total energy
-            # (temporarily update density for energy calculation)
+            # Energy helpers read self.rho_{r,g}; temporarily point them at rho_new.
             rho_g_old = self.rho_g
-            rho_r_old = self.rho_r
             self.rho_g = rho_g_new
             self.rho_r = rho_r_new
             self._build_potential()
@@ -544,7 +547,7 @@ class KPointSCF:
                     e_total = np.mean(recent)
                     break
             
-            # Mix densities
+            # Phase 5: mix and continue the fixed-point iteration.
             self.rho_g = mixer.mix(rho_g_old, rho_g_new)
             self.rho_r = self._g_to_r(self.rho_g)
             

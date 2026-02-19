@@ -91,14 +91,16 @@ class Hamiltonian:
         self._work_g.fill(0)
         self._map_to_fft(psi_g, self._work_g)
         
-        # IFFT: G -> r (with proper normalization)
+        # IFFT: G -> r.
+        # The explicit n_fft factor keeps this transform pair consistent with
+        # the normalization used in g_to_r / r_to_g below.
         self._work_r = np.fft.ifftn(self._work_g) * self.n_fft
         
         # Multiply in real space: V_loc(r) * psi(r)
         # Normalize by sqrt(volume) for proper normalization
         self._work_r *= self.vloc_r / np.sqrt(self.volume)
         
-        # FFT: r -> G
+        # FFT: r -> G (inverse scaling of the IFFT line above).
         self._work_g = np.fft.fftn(self._work_r) / self.n_fft
         
         # Map back to G-vector list
@@ -177,7 +179,8 @@ def g_to_r(psi_g, gvec, fft_shape, volume):
         i3 = m3 % n3
         work[i1, i2, i3] = psi_g[ig]
     
-    # IFFT with normalization
+    # NumPy ifftn includes 1/N; multiply by N and divide by sqrt(V) to recover
+    # the plane-wave normalization convention used in this educational code.
     psi_r = np.fft.ifftn(work) * n_fft / np.sqrt(volume)
     
     return psi_r
@@ -201,7 +204,7 @@ def r_to_g(psi_r, gvec, fft_shape, volume):
     n1, n2, n3 = fft_shape
     n_fft = n1 * n2 * n3
     
-    # FFT
+    # Inverse normalization of g_to_r.
     work = np.fft.fftn(psi_r * np.sqrt(volume)) / n_fft
     
     # Map to G-vector list

@@ -28,20 +28,39 @@ def compute_density(evecs, occupations, gvector, fft_shape, volume,
         volume: Cell volume
         k_weights: K-point weights, scalar or array of shape (nk,)
     
+    Notes:
+        Occupations are expected in the "spin-paired" convention used elsewhere
+        in this codebase (0..2 per spatial orbital).
+
     Returns:
         rho_r: Electron density in real space, shape fft_shape
     """
+    evecs = np.asarray(evecs)
+    occupations = np.asarray(occupations)
+    if evecs.ndim not in (2, 3):
+        raise ValueError(
+            f"evecs must have ndim 2 or 3, got shape {evecs.shape}"
+        )
+
     rho_r = np.zeros(fft_shape, dtype=float)
     
     # Handle single k-point case
     if evecs.ndim == 2:
+        if occupations.ndim != 1:
+            raise ValueError(
+                "For single-k input, occupations must have shape (nbands,)."
+            )
         nbands = evecs.shape[1]
+        if occupations.shape[0] != nbands:
+            raise ValueError(
+                f"Occupation size mismatch: {occupations.shape[0]} vs nbands={nbands}."
+            )
         
         for iband in range(nbands):
             if occupations[iband] < 1e-10:
                 continue
             
-            # Transform to real space
+            # psi(G) -> psi(r), then accumulate f_n |psi_n(r)|^2.
             psi_r = g_to_r(evecs[:, iband], gvector, fft_shape, volume)
             
             # Add to density
@@ -51,9 +70,25 @@ def compute_density(evecs, occupations, gvector, fft_shape, volume,
         # Multiple k-points
         nk = evecs.shape[0]
         nbands = evecs.shape[2]
+        if occupations.ndim == 2 and occupations.shape != (nk, nbands):
+            raise ValueError(
+                "For multi-k input, occupations must be (nk, nbands) "
+                f"or (nbands,); got {occupations.shape}."
+            )
+        if occupations.ndim == 1 and occupations.shape[0] != nbands:
+            raise ValueError(
+                f"Occupation size mismatch: {occupations.shape[0]} vs nbands={nbands}."
+            )
         
         if np.isscalar(k_weights):
+            # Scalar weights are interpreted as "equal total weight".
             k_weights = np.ones(nk) * k_weights / nk
+        else:
+            k_weights = np.asarray(k_weights)
+            if k_weights.shape != (nk,):
+                raise ValueError(
+                    f"k_weights must have shape ({nk},), got {k_weights.shape}."
+                )
         
         for ik in range(nk):
             for iband in range(nbands):
@@ -62,7 +97,7 @@ def compute_density(evecs, occupations, gvector, fft_shape, volume,
                 if occ < 1e-10:
                     continue
                 
-                # Transform to real space
+                # Weighted k-point contribution: w_k f_nk |psi_nk(r)|^2.
                 psi_r = g_to_r(evecs[ik, :, iband], gvector, fft_shape, volume)
                 
                 # Add to density with k-weight
