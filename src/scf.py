@@ -8,8 +8,43 @@ This module implements a minimal Gamma-point Kohn-Sham cycle:
     4. mix rho and rho_new
     5. check energy convergence
 
-The code is intentionally explicit (not heavily abstracted) so students can
-trace how each DFT equation maps to concrete arrays.
+The code is intentionally explicit (not heavily abstracted) so that readers
+can trace how each DFT equation maps to concrete arrays.
+
+=============================================================================
+PEDAGOGICAL NOTES
+=============================================================================
+
+The Self-Consistent Field (SCF) method solves the Kohn-Sham equations:
+
+    [-ℏ²/(2m)∇² + V_eff(r)] ψ_i(r) = ε_i ψ_i(r)
+
+The challenge is that V_eff depends on the electron density ρ(r), which in
+turn depends on the wavefunctions ψ_i(r):
+
+    ρ(r) = Σ_i f_i |ψ_i(r)|²
+
+This creates a self-consistency problem: we need ρ to find V_eff, but we
+need V_eff to find the ψ_i that give us ρ!
+
+SOLUTION: Iterative SCF procedure:
+    1. Start with an initial guess for ρ(r)
+    2. Compute V_eff = V_H[ρ] + V_xc[ρ] + V_ext
+    3. Solve the eigenvalue problem to get new ψ_i
+    4. Compute new ρ_new from the ψ_i
+    5. Mix ρ_old and ρ_new to get ρ_next (prevents oscillations)
+    6. Check if energy has converged; if not, go to step 2
+
+KEY INSIGHT: The mixing step (5) is crucial! Without it, the density can
+oscillate wildly and never converge. Broyden mixing uses history to
+accelerate convergence.
+
+WHY G-SPACE (RECIPROCAL SPACE)?
+- Kinetic energy T = -½∇² becomes diagonal: T|G⟩ = ½|G|² |G⟩
+- Hartree potential V_H is trivial: V_H(G) = 4πρ(G)/|G|²
+- Periodic boundary conditions are naturally satisfied
+- Cutoff in |G| provides systematic basis set convergence
+=============================================================================
 """
 
 import numpy as np
@@ -140,17 +175,34 @@ class SCFSolver:
         Convention in this module:
         - each spatial orbital can host up to 2 electrons (spin-paired),
         - occupations are therefore in [0, 2].
+
+        PEDAGOGICAL NOTE: Aufbau Principle
+        ----------------------------------
+        In the ground state, electrons fill orbitals from lowest to highest
+        energy. With spin-pairing (no spin polarization), each spatial
+        orbital can hold 2 electrons (one spin-up, one spin-down).
+
+        Example: 8 electrons with 6 bands
+            Band 1: occ = 2.0  (filled)
+            Band 2: occ = 2.0  (filled)
+            Band 3: occ = 2.0  (filled)
+            Band 4: occ = 2.0  (filled)
+            Band 5: occ = 0.0  (empty - above Fermi level)
+            Band 6: occ = 0.0  (empty)
+
+        For metals, we would use Fermi-Dirac smearing instead of this
+        simple step-function filling. See smearing.py for details.
         """
         occ = np.zeros(self.n_bands)
         n_filled = self.n_electrons // 2  # Assuming spin-paired
         remainder = self.n_electrons % 2
-        
+
         for i in range(min(n_filled, self.n_bands)):
             occ[i] = 2.0  # Spin-paired
-        
+
         if remainder > 0 and n_filled < self.n_bands:
             occ[n_filled] = float(remainder)
-        
+
         return occ
     
     def run(self, max_iter=50, tol=1e-6, verbose=True):
@@ -250,57 +302,136 @@ class SCFSolver:
         return energy
     
     def _initialize_density(self):
-        """Initialize electron density (uniform)."""
+        """
+        Initialize electron density (uniform).
+
+        PEDAGOGICAL NOTE: Initial Density Guess
+        ---------------------------------------
+        The initial density strongly affects convergence speed. Options:
+
+        1. UNIFORM (used here): ρ(r) = N_electrons / Volume
+           - Simple but far from final answer
+           - Works for jellium-like systems
+
+        2. ATOMIC SUPERPOSITION (production codes): ρ(r) = Σ_atom ρ_atom(r)
+           - Much closer to final density
+           - Faster convergence for real materials
+
+        The uniform guess integrates to N_electrons by construction:
+            ∫ ρ(r) dr = (N_e/V) × V = N_e  ✓
+        """
         # Uniform density integrates to n_electrons by construction.
         rho_0 = self.n_electrons / self.volume
-        
-        # Real-space density
+
+        # Real-space density on the FFT grid
         self.rho_r = np.full(self.fft_shape, rho_0)
-        
-        # G-space density
+
+        # G-space density (Fourier transform of rho_r)
+        # For uniform density: only ρ(G=0) is nonzero
         self.rho_g = self._r_to_g_density(self.rho_r)
     
     def _r_to_g_density(self, rho_r):
-        """Transform density from real space to G-space."""
+        """
+        Transform density from real space to G-space.
+
+        PEDAGOGICAL NOTE: FFT Conventions
+        ----------------------------------
+        The continuous Fourier transform of density is:
+            ρ(G) = (1/Ω) ∫ ρ(r) e^{-iG·r} dr
+
+        On a discrete grid with N points:
+            ρ(G) ≈ (1/N) Σ_r ρ(r) e^{-iG·r}  (Riemann sum)
+
+        NumPy's fftn computes: Σ_r ρ(r) e^{-iG·r}  (no 1/N factor)
+        So we divide by N to get proper Fourier coefficients.
+
+        The result ρ(G=0) equals the average density:
+            ρ(G=0) = (1/N) Σ_r ρ(r) = ⟨ρ⟩
+        """
         # NumPy FFT is unnormalized; divide by N to represent Fourier coefficients.
         rho_fft = np.fft.fftn(rho_r) / self.n_fft
-        
-        # Map to G-vector list
+
+        # Map from full FFT grid to our G-vector list (subset within cutoff)
         rho_g = self.gvec.map_from_fft_grid(rho_fft)
-        
+
         return rho_g
-    
+
     def _g_to_r_density(self, rho_g):
-        """Transform density from G-space to real space."""
-        # Map to FFT grid
+        """
+        Transform density from G-space to real space.
+
+        PEDAGOGICAL NOTE: Inverse FFT
+        ------------------------------
+        The inverse transform recovers real-space density:
+            ρ(r) = Σ_G ρ(G) e^{+iG·r}
+
+        NumPy's ifftn computes: (1/N) Σ_G ρ(G) e^{+iG·r}
+        So we multiply by N to undo the 1/N factor.
+
+        Combined with _r_to_g_density, we have:
+            ρ(r) → ρ(G) → ρ(r)  is identity (up to FFT precision)
+        """
+        # Map from G-vector list to full FFT grid
         rho_fft = self.gvec.map_to_fft_grid(rho_g, self.fft_shape)
-        
+
         # Inverse of the scaling used in _r_to_g_density.
         rho_r = np.fft.ifftn(rho_fft) * self.n_fft
-        
+
+        # Density must be real (imaginary part is numerical noise)
         return np.real(rho_r)
     
     def _build_potential(self):
-        """Build effective potential V_eff = V_H + V_xc + V_ext."""
-        # Hartree is naturally computed in reciprocal space.
+        """
+        Build effective potential V_eff = V_H + V_xc + V_ext.
+
+        PEDAGOGICAL NOTE: The Three Potential Components
+        -------------------------------------------------
+        The Kohn-Sham effective potential has three parts:
+
+        1. HARTREE POTENTIAL V_H(r):
+           - Describes electron-electron Coulomb repulsion
+           - Computed in G-space: V_H(G) = 4π ρ(G) / |G|²
+           - This is just solving Poisson's equation: ∇²V_H = -4πρ
+
+        2. EXCHANGE-CORRELATION POTENTIAL V_xc(r):
+           - Captures quantum many-body effects (exchange + correlation)
+           - In LDA: V_xc(r) = dE_xc/dρ evaluated at local density ρ(r)
+           - This is the "magic" of DFT - approximates many-body physics!
+
+        3. EXTERNAL POTENTIAL V_ext(r):
+           - Usually the ionic potential from nuclei/pseudopotentials
+           - In this pedagogical code: harmonic well or jellium background
+
+        WHY DIFFERENT SPACES?
+        - V_H is natural in G-space (algebraic vs solving PDE)
+        - V_xc is natural in r-space (depends on local density)
+        - We transform V_H to r-space so H|ψ⟩ can use a single FFT
+        """
+        # ===== STEP 1: Hartree potential (G-space calculation) =====
+        # V_H(G) = 4πρ(G)/|G|² is trivial in reciprocal space!
+        # Compare to solving ∇²V_H = -4πρ in real space (much harder)
         v_hartree_g = compute_hartree_potential(self.rho_g, self.gvec.norms)
-        
-        # XC is local in real space for LDA.
+
+        # ===== STEP 2: XC potential (real-space calculation) =====
+        # LDA: V_xc depends only on ρ(r) at each point
+        # Protect against negative/zero density (numerical noise)
         rho_real = np.maximum(np.real(self.rho_r), 1e-20)
         v_xc_r, self._exc_r = lda_xc(rho_real)
-        
-        # Transform Hartree back to the real-space grid for H application.
+
+        # ===== STEP 3: Transform Hartree to real space =====
+        # We need V_H(r) to apply the potential via FFT convolution
         v_hartree_fft = self.gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
         v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
-        
-        # Total local potential
+
+        # ===== STEP 4: Sum all contributions =====
+        # V_eff(r) = V_H(r) + V_xc(r) + V_ext(r)
         v_local_r = v_hartree_r + v_xc_r + self.v_ext
-        
-        # Store for energy calculation
+
+        # Store for energy calculation (need individual components)
         self._v_hartree_r = v_hartree_r
         self._v_xc_r = v_xc_r
-        
-        # Set in Hamiltonian
+
+        # Pass to Hamiltonian for H|ψ⟩ application
         self.hamiltonian.set_local_potential(v_local_r)
     
     def _compute_density(self):
@@ -332,37 +463,68 @@ class SCFSolver:
     def _compute_total_energy(self):
         """
         Compute total energy.
-        
+
         E_tot = E_band - E_H + E_xc - E_Vxc
-        
+
         This base-class implementation covers the pedagogical jellium /
         harmonic-well case.  The UPF-enabled SCF solver (see silicon_upf.py)
         adds ion-ion Ewald and pseudopotential energy terms.
+
+        PEDAGOGICAL NOTE: Double-Counting Correction
+        ---------------------------------------------
+        This is one of the trickiest parts of DFT to understand!
+
+        The band energy is:
+            E_band = Σ_i f_i ε_i = Σ_i f_i ⟨ψ_i|H|ψ_i⟩
+                   = Σ_i f_i ⟨ψ_i| T + V_H + V_xc + V_ext |ψ_i⟩
+
+        But this OVER-COUNTS the Hartree and XC energies!
+
+        WHY? Consider Hartree:
+        - E_H = (1/2) ∫∫ ρ(r)ρ(r')/|r-r'| dr dr' = (1/2) ∫ V_H(r)ρ(r) dr
+        - But E_band contains ∫ V_H(r)ρ(r) dr (the full integral, not half!)
+
+        So we must subtract the extra Hartree:
+            E_tot = E_band - E_H  (removes the double-counted half)
+
+        Similar for XC:
+        - E_band contains ∫ V_xc(r)ρ(r) dr = E_Vxc
+        - But true XC energy is E_xc = ∫ ε_xc(r)ρ(r) dr ≠ E_Vxc
+        - (They differ because V_xc = d(ρε_xc)/dρ ≠ ε_xc)
+
+        Final formula:
+            E_tot = E_band - E_H + E_xc - E_Vxc + E_ion-ion
+
+        This correctly counts each interaction exactly once!
         """
-        # Band energy: sum of occupied eigenvalues
+        # ===== Band energy: sum of occupied eigenvalues =====
+        # E_band = Σ_i f_i ε_i (includes T + V_H + V_xc + V_ext)
         e_band = np.sum(self.occupations * self.evals)
-        
-        # Hartree energy
+
+        # ===== Hartree energy (for double-counting correction) =====
+        # E_H = (Ω/2) Σ_{G≠0} 4π|ρ(G)|²/|G|²
         e_hartree = compute_hartree_energy(self.rho_g, self.gvec.norms, self.volume)
-        
-        # XC energy
+
+        # ===== XC energy =====
+        # E_xc = ∫ ρ(r) ε_xc(ρ(r)) dr
         rho_real = np.maximum(np.real(self.rho_r), 1e-20)
         e_xc = compute_xc_energy(rho_real, self._exc_r, self.volume, self.n_fft)
-        
-        # XC potential energy (for double-counting correction)
-        e_vxc = compute_xc_potential_energy(rho_real, self._v_xc_r, 
+
+        # ===== XC potential energy (for double-counting correction) =====
+        # E_Vxc = ∫ ρ(r) V_xc(r) dr  (this is what E_band contains)
+        e_vxc = compute_xc_potential_energy(rho_real, self._v_xc_r,
                                             self.volume, self.n_fft)
-        
+
         # Diagnostic only: e_ext is already included implicitly in e_band.
         # We keep this explicit term for teaching and consistency checks.
         e_ext = (self.volume / self.n_fft) * np.sum(rho_real * self.v_ext)
-        
-        # Total energy
+
+        # ===== Total energy with double-counting corrections =====
         # E_tot = E_band - E_H + E_xc - E_Vxc
-        # But E_band already includes E_H + E_Vxc + E_ext
-        # So: E_tot = E_band - E_H - E_Vxc + E_xc
+        # The -E_H removes the extra half of Hartree in E_band
+        # The +E_xc - E_Vxc replaces ∫ρV_xc with ∫ρε_xc
         e_total = e_band - e_hartree + e_xc - e_vxc
-        
+
         return e_total
     
     def get_eigenvalues(self):

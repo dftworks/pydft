@@ -4,6 +4,60 @@ Density mixing schemes for SCF convergence acceleration.
 Implements:
 - Linear mixing (simple)
 - Broyden mixing (modified Broyden II method)
+
+=============================================================================
+PEDAGOGICAL NOTES
+=============================================================================
+
+THE PROBLEM: SCF INSTABILITY
+----------------------------
+The naive SCF iteration:
+    ρ_in → V_eff → solve H → ψ → ρ_out → repeat with ρ_out
+
+often DIVERGES! The density oscillates wildly instead of converging.
+
+WHY? The map ρ_in → ρ_out is a fixed-point iteration. If the "Jacobian"
+(derivative of ρ_out with respect to ρ_in) has eigenvalues > 1, small
+changes get amplified and the iteration is unstable.
+
+THE SOLUTION: DENSITY MIXING
+----------------------------
+Instead of using ρ_out directly, we mix it with ρ_in:
+    ρ_next = ρ_in + α × (ρ_out - ρ_in)
+
+where α < 1 is the mixing parameter. This damps the oscillations.
+
+LINEAR MIXING (Simple)
+----------------------
+    ρ_next = ρ_in + α × residual
+    where residual = ρ_out - ρ_in
+
+Pros: Simple, always stable for small enough α
+Cons: Slow! Typical α ~ 0.1-0.3 means many iterations
+
+BROYDEN MIXING (Accelerated)
+----------------------------
+Uses history of (ρ_in, ρ_out) pairs to estimate the inverse Jacobian.
+This predicts how the density should change to reach the fixed point.
+
+Key idea: The inverse Jacobian J⁻¹ tells us:
+    Δρ_in ≈ J⁻¹ × Δresidual
+
+By accumulating history, we build up a low-rank approximation to J⁻¹.
+This dramatically accelerates convergence (typical: 10-20 iterations).
+
+PULAY MIXING (DIIS)
+-------------------
+Direct Inversion in the Iterative Subspace. Finds the linear combination
+of previous densities that minimizes the residual norm:
+    ρ_next = Σ_i c_i × ρ_i  where c_i minimize ||residual||²
+
+This is a least-squares problem with a constraint Σc_i = 1.
+
+References:
+    Johnson, D.D. Phys. Rev. B 38, 12807 (1988) - Modified Broyden
+    Pulay, P. Chem. Phys. Lett. 73, 393 (1980) - DIIS
+=============================================================================
 """
 
 import numpy as np
@@ -48,28 +102,52 @@ class LinearMixer:
 class BroydenMixer:
     """
     Modified Broyden mixing (Broyden II method).
-    
+
     Uses history of input/output densities to estimate the inverse
     Jacobian and accelerate convergence.
-    
+
     Reference:
         Johnson, D.D. Phys. Rev. B 38, 12807 (1988)
+
+    PEDAGOGICAL NOTE: How Broyden Works
+    ------------------------------------
+    We want to solve: ρ = F(ρ)  (fixed point problem)
+    Equivalently: R(ρ) = F(ρ) - ρ = 0  (root finding)
+
+    Newton's method: ρ_next = ρ - J⁻¹ × R(ρ)
+    where J = ∂R/∂ρ is the Jacobian.
+
+    But J is huge (N×N for N grid points)! We can't compute or store it.
+
+    BROYDEN'S TRICK: Build a low-rank approximation to J⁻¹ from history.
+
+    Given pairs (Δρ^i, ΔR^i) where:
+        Δρ^i = ρ^{i+1} - ρ^i
+        ΔR^i = R^{i+1} - R^i
+
+    We want J⁻¹ such that: J⁻¹ × ΔR^i ≈ Δρ^i (secant condition)
+
+    The update formula modifies ρ_next based on how residuals changed
+    in previous iterations.
     """
-    
+
     def __init__(self, alpha=0.7, n_history=8, omega0=0.01):
         """
         Initialize Broyden mixer.
-        
+
         Args:
             alpha: Mixing parameter for initial linear mixing step
+                   (larger α → more aggressive mixing, but less stable)
             n_history: Maximum number of iterations to keep in history
+                       (more history → better J⁻¹ approximation, but more memory)
             omega0: Regularization parameter for matrix inversion
+                    (prevents numerical instability when history is nearly dependent)
         """
         self.alpha = alpha
         self.n_history = n_history
         self.omega0 = omega0
-        
-        # History storage
+
+        # History storage: lists of (ρ_in, ρ_out) from previous iterations
         self.history_in = []
         self.history_out = []
         self.n_iter = 0

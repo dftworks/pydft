@@ -4,6 +4,56 @@ Exchange-correlation functionals.
 Implements LDA (Local Density Approximation) with:
 - Slater exchange
 - Perdew-Zunger correlation
+
+=============================================================================
+PEDAGOGICAL NOTES
+=============================================================================
+
+THE HEART OF DFT: Exchange-Correlation
+
+The exact ground state energy is a functional of the density:
+    E[ρ] = T[ρ] + E_ext[ρ] + E_H[ρ] + E_xc[ρ]
+
+where:
+    T[ρ]     = kinetic energy of interacting electrons (UNKNOWN!)
+    E_ext[ρ] = interaction with external potential
+    E_H[ρ]   = classical Coulomb (Hartree) energy
+    E_xc[ρ]  = exchange-correlation energy (ALL the quantum many-body physics!)
+
+THE KOHN-SHAM TRICK
+-------------------
+Replace the interacting electrons with non-interacting electrons that have
+the SAME density ρ(r). The kinetic energy of non-interacting electrons is:
+    T_s[ρ] = Σ_i f_i ⟨ψ_i|-½∇²|ψ_i⟩  (easy to compute!)
+
+The difference is absorbed into E_xc:
+    E_xc = (T - T_s) + (E_ee - E_H)
+
+So E_xc contains:
+    1. Kinetic correlation (T - T_s)
+    2. Exchange energy (Pauli exclusion)
+    3. Correlation energy (electron-electron correlation beyond exchange)
+
+THE CHALLENGE: E_xc[ρ] IS UNKNOWN!
+----------------------------------
+We must approximate it. The simplest approximation is the Local Density
+Approximation (LDA):
+
+    E_xc[ρ] ≈ ∫ ρ(r) ε_xc(ρ(r)) dr
+
+where ε_xc(ρ) is the XC energy per electron of a UNIFORM electron gas
+at density ρ. This is known exactly from Quantum Monte Carlo!
+
+The XC potential (for the Kohn-Sham equations) is:
+    V_xc(r) = δE_xc/δρ(r) = d(ρε_xc)/dρ
+
+LDA is surprisingly accurate for solids, but fails for molecules with
+rapidly varying density. GGA (e.g., PBE) improves on this.
+
+References:
+    Kohn & Sham, Phys. Rev. 140, A1133 (1965) - The original KS paper
+    Perdew & Zunger, Phys. Rev. B 23, 5048 (1981) - LDA parametrization used here
+=============================================================================
 """
 
 import numpy as np
@@ -43,61 +93,107 @@ def lda_xc(rho):
 def slater_exchange(rho):
     """
     Slater (Dirac) exchange functional.
-    
+
     epsilon_x = -3/4 * (3*rho/pi)^(1/3)
     V_x = -4/3 * epsilon_x / rho = -(3*rho/pi)^(1/3)
-    
+
     Args:
         rho: Electron density (positive)
-    
+
     Returns:
         vx: Exchange potential
         ex: Exchange energy density
+
+    PEDAGOGICAL NOTE: What is Exchange?
+    ------------------------------------
+    Exchange arises from the Pauli exclusion principle: two electrons
+    with the same spin cannot be at the same position. This creates an
+    "exchange hole" around each electron.
+
+    For a uniform electron gas, Dirac (1930) derived the exact exchange:
+        ε_x = -3/4 × (3/π)^{1/3} × ρ^{1/3}
+
+    Note:
+    - ε_x < 0 (exchange always lowers the energy)
+    - ε_x ~ ρ^{1/3} (depends only weakly on density)
+
+    The exchange potential is V_x = d(ρε_x)/dρ:
+        V_x = ε_x + ρ × dε_x/dρ = ε_x × (1 + 1/3) = (4/3)ε_x
+
+    So V_x = -(3ρ/π)^{1/3}  (Slater's Xα potential with α=1)
     """
-    # Exchange coefficient
+    # Exchange coefficient: c_x = -(3/π)^{1/3}
     cx = -(3.0 / PI) ** (1.0 / 3.0)
-    
-    # Exchange potential: vx = cx * rho^(1/3)
+
+    # Exchange potential: V_x = c_x × ρ^{1/3}
     rho_third = rho ** (1.0 / 3.0)
     vx = cx * rho_third
-    
-    # Exchange energy density: ex = 3/4 * vx
+
+    # Exchange energy density: ε_x = (3/4) × V_x
+    # (because V_x = (4/3)ε_x, so ε_x = (3/4)V_x)
     ex = 0.75 * vx
-    
+
     return vx, ex
 
 
 def pz_correlation(rho):
     """
     Perdew-Zunger parameterization of the correlation energy.
-    
+
     Different formulas for high density (rs < 1) and low density (rs >= 1),
     where rs = (3/(4*pi*rho))^(1/3) is the Wigner-Seitz radius.
-    
+
     Args:
         rho: Electron density (positive)
-    
+
     Returns:
         vc: Correlation potential
         ec: Correlation energy density
+
+    PEDAGOGICAL NOTE: What is Correlation?
+    ---------------------------------------
+    Correlation is the part of electron-electron interaction NOT captured
+    by the Hartree (classical Coulomb) and exchange energies.
+
+    Physical origin: electrons avoid each other beyond what Pauli exclusion
+    requires. They are "correlated" - knowing one electron's position tells
+    us something about where others are likely to be.
+
+    THE WIGNER-SEITZ RADIUS
+    The Wigner-Seitz radius r_s is defined by:
+        (4π/3)r_s³ = 1/ρ   (volume per electron)
+    So:
+        r_s = (3/(4πρ))^{1/3}
+
+    Physical meaning:
+    - r_s ~ 2-6 Bohr for metals (Na: ~4, Al: ~2)
+    - r_s < 1: high density (electrons close together)
+    - r_s > 1: low density (electrons far apart)
+
+    WHY TWO REGIMES?
+    - High density (r_s < 1): perturbation theory works → logarithmic form
+    - Low density (r_s ≥ 1): strong correlation → fit to QMC data
+
+    The PZ parameterization interpolates Ceperley-Alder QMC data.
+    Reference: Perdew & Zunger, Phys. Rev. B 23, 5048 (1981)
     """
-    # Wigner-Seitz radius
+    # Wigner-Seitz radius: r_s = (3/(4πρ))^{1/3}
     rs = (3.0 / (4.0 * PI * rho)) ** (1.0 / 3.0)
-    
+
     # Initialize outputs
     vc = np.zeros_like(rho)
     ec = np.zeros_like(rho)
-    
-    # Low density regime: rs >= 1
+
+    # Low density regime: r_s >= 1 (strong correlation, fit to QMC)
     mask_low = rs >= 1.0
     if np.any(mask_low):
         vc[mask_low], ec[mask_low] = _pz_low_density(rs[mask_low])
-    
-    # High density regime: rs < 1
+
+    # High density regime: r_s < 1 (weak correlation, perturbative form)
     mask_high = ~mask_low
     if np.any(mask_high):
         vc[mask_high], ec[mask_high] = _pz_high_density(rs[mask_high])
-    
+
     return vc, ec
 
 
