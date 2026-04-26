@@ -333,7 +333,7 @@ class PCGEigensolver:
                 alpha = ev[1] / ev[0]
             else:
                 alpha = 0.0
-        except:
+        except np.linalg.LinAlgError:
             alpha = 0.0
         
         return alpha

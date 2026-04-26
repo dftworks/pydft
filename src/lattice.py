@@ -167,7 +167,9 @@ class Lattice:
         b_i = 2*pi * (a_j x a_k) / (a_i . (a_j x a_k))
         """
         if self._reciprocal is None:
-            # Transpose of inverse, scaled by 2*pi
+            # Transpose of inverse, scaled by 2*pi.
+            # This is equivalent to the cross-product definition: 
+            # b_1 = 2*pi * (a_2 x a_3) / (a_1 . (a_2 x a_3))
             self._reciprocal = TWOPI * np.linalg.inv(self.vectors).T
         return self._reciprocal
     

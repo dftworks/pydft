@@ -53,6 +53,10 @@ SUBSET of this grid (those within cutoff). We need functions to:
 - map_from_fft_grid: 3D FFT array → G-vector list
 
 Negative Miller indices wrap around: m = -1 maps to index N-1.
+
+CROSS-REFERENCE: 
+See `pydft-book`, Chapter "Crystal Lattice", Section "G Space" (`gspace.tex`)
+and Chapter "Basis", Section "FFT Grid" (`fftgrid.tex`) for detailed derivations.
 =============================================================================
 """
 

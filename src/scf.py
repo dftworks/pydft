@@ -114,8 +114,8 @@ class SCFSolver:
         if external_potential is not None:
             self.v_ext = external_potential
         else:
-            # Default to a harmonic confining potential when none is provided.
-            self.v_ext = self._create_harmonic_potential()
+            # Default to a flat zero potential (jellium background)
+            self.v_ext = np.zeros(self.fft_shape)
         
         # Eigensolver
         self.eigensolver = PCGEigensolver(self.npw, self.n_bands)

@@ -7,6 +7,10 @@ for sampling the Brillouin zone in periodic DFT calculations.
 Reference:
     Monkhorst, H. J. & Pack, J. D. "Special points for Brillouin-zone 
     integrations" Phys. Rev. B 13, 5188 (1976)
+
+CROSS-REFERENCE: 
+See `pydft-book`, Chapter "DFT in Plane Wave", Section "Brillouin zone sampling" 
+(`ksampling.tex`) for theoretical foundations and mesh illustrations.
 """
 
 import numpy as np

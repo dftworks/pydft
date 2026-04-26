@@ -197,8 +197,11 @@ class BroydenMixer:
             # Apply correction
             ng = len(rho_in)
             for n in range(m):
-                # Residual and density differences
-                dres = self.history_out[n + 1] - self.history_out[n]
+                # Residual differences: ΔR = R_{n+1} - R_n
+                # where R_i = rho_out_i - rho_in_i (the SCF residual)
+                res_new = self.history_out[n + 1] - self.history_in[n + 1]
+                res_old = self.history_out[n] - self.history_in[n]
+                dres = res_new - res_old
                 drho = self.history_in[n + 1] - self.history_in[n]
                 
                 # Normalize
@@ -228,13 +231,18 @@ class BroydenMixer:
         A = np.zeros((m, m), dtype=complex)
         
         for i in range(m):
-            dres_i = self.history_out[i + 1] - self.history_out[i]
+            # ΔR_i = R_{i+1} - R_i where R = rho_out - rho_in
+            res_new_i = self.history_out[i + 1] - self.history_in[i + 1]
+            res_old_i = self.history_out[i] - self.history_in[i]
+            dres_i = res_new_i - res_old_i
             norm_i = np.sqrt(np.sum(np.abs(dres_i)**2))
             if norm_i > 1e-20:
                 dres_i = dres_i / norm_i
             
             for j in range(m):
-                dres_j = self.history_out[j + 1] - self.history_out[j]
+                res_new_j = self.history_out[j + 1] - self.history_in[j + 1]
+                res_old_j = self.history_out[j] - self.history_in[j]
+                dres_j = res_new_j - res_old_j
                 norm_j = np.sqrt(np.sum(np.abs(dres_j)**2))
                 if norm_j > 1e-20:
                     dres_j = dres_j / norm_j
@@ -256,7 +264,10 @@ class BroydenMixer:
             res_i = self.history_out[i] - self.history_in[i]
             
             for k in range(m):
-                dres_k = self.history_out[k + 1] - self.history_out[k]
+                # ΔR_k = R_{k+1} - R_k
+                res_new_k = self.history_out[k + 1] - self.history_in[k + 1]
+                res_old_k = self.history_out[k] - self.history_in[k]
+                dres_k = res_new_k - res_old_k
                 norm_k = np.sqrt(np.sum(np.abs(dres_k)**2))
                 if norm_k > 1e-20:
                     dres_k = dres_k / norm_k

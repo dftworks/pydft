@@ -2,6 +2,43 @@
 Plane wave basis set for a specific k-point.
 
 Extends GVector with k-point specific information.
+
+=============================================================================
+PEDAGOGICAL NOTES
+=============================================================================
+
+THE PLANE WAVE BASIS AT A SPECIFIC k-POINT
+------------------------------------------
+In a periodic crystal, the Kohn-Sham orbitals according to Bloch's theorem are:
+    ψ_{nk}(r) = e^{ik·r} u_{nk}(r)
+
+The periodic part u_{nk}(r) is expanded in plane waves using the reciprocal 
+lattice vectors (G-vectors):
+    u_{nk}(r) = Σ_G c_{nk}(G) e^{iG·r}
+
+Therefore, the full wavefunction is represented as:
+    ψ_{nk}(r) = Σ_G c_{nk}(G) e^{i(k+G)·r}
+
+This means that for each k-point in the Brillouin zone, the effective plane 
+wave basis vectors are |k+G⟩, with wavevectors (k+G).
+
+KINETIC ENERGY
+--------------
+The kinetic energy operator is T = -½∇². When applied to our basis functions:
+    T |k+G⟩ = ½|k+G|² |k+G⟩
+
+For a given energy cutoff E_cut, we keep all G-vectors such that:
+    ½|k+G|² < E_cut
+
+Note: In this simple pedagogical code, we often use the same G-vector set for 
+all k-points (defined by ½|G|² < E_cut for the Gamma point), but their 
+kinetic energies ½|k+G|² are correctly computed specifically for each k-point.
+
+CROSS-REFERENCE: 
+See `pydft-book`, Chapter "Basis", Section "Plane Wave Basis" 
+(`planewavebasis.tex`) and Section "Brillouin zone sampling" (`ksampling.tex`)
+for detailed theory.
+=============================================================================
 """
 
 import numpy as np
