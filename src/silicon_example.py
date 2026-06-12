@@ -188,9 +188,9 @@ class SiliconSCF:
         # Eigensolver
         self.eigensolver = PCGEigensolver(self.npw, self.n_bands)
         
-        # Mixer - use linear mixing with moderate alpha for stability
-        from src.mixing import LinearMixer
-        self.mixer = LinearMixer(alpha=0.3)
+        # Mixer - Broyden mixing accelerates convergence by building a
+        # low-rank approximation to the inverse Jacobian from SCF history.
+        self.mixer = BroydenMixer(alpha=0.7, n_history=8)
         
         # Smearing helper kept for optional workflows; current run uses fixed occupations.
         self.smearing = create_smearing('gaussian', sigma=0.01)
@@ -246,7 +246,7 @@ class SiliconSCF:
                 evecs=self.evecs,
                 evals=self.evals,
                 tol=1e-8,
-                max_iter=50
+                max_iter=200
             )
             
             # Compute new density

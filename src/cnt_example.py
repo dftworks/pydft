@@ -35,7 +35,7 @@ from src.ewald import Ewald
 from src.smearing import create_smearing, find_fermi_level
 from src.hamiltonian import Hamiltonian, g_to_r
 from src.eigensolver import PCGEigensolver, random_initial_guess
-from src.mixing import LinearMixer
+from src.mixing import BroydenMixer
 
 
 def create_cnt_crystal(n=4, m=0, vacuum=18.0):
@@ -240,8 +240,10 @@ class CarbonNanotubeSCF:
         # Hamiltonian
         self.hamiltonian = Hamiltonian(self.gvec, self.volume)
 
-        # Mixer
-        self.mixer = LinearMixer(alpha=0.3)
+        # Mixer - Broyden mixing with a conservative alpha: the CNT cell has
+        # many atoms and large vacuum regions, which make the SCF stiffer
+        # than for bulk silicon or flat graphene.
+        self.mixer = BroydenMixer(alpha=0.5, n_history=8)
 
         # Smearing
         self.smearing = create_smearing('gaussian', sigma=0.02)
@@ -298,7 +300,7 @@ class CarbonNanotubeSCF:
                 evecs=self.evecs,
                 evals=self.evals,
                 tol=1e-8,
-                max_iter=50
+                max_iter=200
             )
 
             rho_new = self._compute_density()

@@ -34,7 +34,7 @@ from src.ewald import Ewald
 from src.smearing import create_smearing, find_fermi_level
 from src.hamiltonian import Hamiltonian, g_to_r
 from src.eigensolver import PCGEigensolver, random_initial_guess
-from src.mixing import LinearMixer
+from src.mixing import BroydenMixer
 
 
 def create_graphene_crystal():
@@ -200,8 +200,8 @@ class GrapheneSCF:
         # Eigensolver
         self.eigensolver = PCGEigensolver(self.npw, self.n_bands)
 
-        # Mixer
-        self.mixer = LinearMixer(alpha=0.3)
+        # Mixer - Broyden mixing for fast, stable SCF convergence
+        self.mixer = BroydenMixer(alpha=0.7, n_history=8)
 
         # Smearing (Gaussian, broader than for Si because graphene is a semimetal)
         self.smearing = create_smearing('gaussian', sigma=0.02)
@@ -259,7 +259,7 @@ class GrapheneSCF:
                 evecs=self.evecs,
                 evals=self.evals,
                 tol=1e-8,
-                max_iter=50
+                max_iter=200
             )
 
             # Compute new density
