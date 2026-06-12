@@ -11,7 +11,7 @@ The key computational idea:
 - K-point mesh: 1 x 1 x n3 (dense only along the tube axis)
 
 A (4,0) zigzag CNT is chosen because it is the smallest zigzag tube that
-gives a reasonable structure (16 atoms per unit cell, diameter ~ 3.1 Angstrom).
+gives a reasonable structure (8 atoms per unit cell, diameter ~ 3.1 Angstrom).
 
 Nanotube classification:
 - Zigzag (n,0): metallic if n is a multiple of 3, else semiconducting
@@ -240,8 +240,10 @@ class CarbonNanotubeSCF:
         # Hamiltonian
         self.hamiltonian = Hamiltonian(self.gvec, self.volume)
 
-        # Mixer
-        self.mixer = LinearMixer(alpha=0.3)
+        # Mixer - simple linear mixing. The CNT cell (many atoms, vacuum in
+        # two directions) is the stiffest system in the examples; a small
+        # alpha keeps the density update gentle enough to avoid sloshing.
+        self.mixer = LinearMixer(alpha=0.1)
 
         # Smearing
         self.smearing = create_smearing('gaussian', sigma=0.02)
@@ -298,7 +300,7 @@ class CarbonNanotubeSCF:
                 evecs=self.evecs,
                 evals=self.evals,
                 tol=1e-8,
-                max_iter=50
+                max_iter=200
             )
 
             rho_new = self._compute_density()
@@ -441,6 +443,8 @@ class CarbonNanotubeSCF:
 
 def main():
     """Run carbon nanotube calculation."""
+    # Fixed seed for reproducible SCF output (see silicon example).
+    np.random.seed(42)
     print("\n" + "#" * 60)
     print("# Educational Carbon Nanotube DFT Calculation")
     print("#" * 60)

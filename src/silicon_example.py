@@ -31,7 +31,7 @@ from src.ewald import Ewald
 from src.smearing import create_smearing, find_fermi_level
 from src.hamiltonian import Hamiltonian, g_to_r
 from src.eigensolver import PCGEigensolver, random_initial_guess
-from src.mixing import BroydenMixer
+from src.mixing import LinearMixer
 
 
 def create_silicon_crystal():
@@ -188,9 +188,11 @@ class SiliconSCF:
         # Eigensolver
         self.eigensolver = PCGEigensolver(self.npw, self.n_bands)
         
-        # Mixer - use linear mixing with moderate alpha for stability
-        from src.mixing import LinearMixer
-        self.mixer = LinearMixer(alpha=0.3)
+        # Mixer - simple linear mixing. A small alpha is essential here:
+        # alpha=0.3 makes this system oscillate (charge sloshing), while
+        # alpha=0.1 converges in ~20 iterations. Slower than Broyden/Pulay
+        # but the algorithm is one line and easy to reason about.
+        self.mixer = LinearMixer(alpha=0.1)
         
         # Smearing helper kept for optional workflows; current run uses fixed occupations.
         self.smearing = create_smearing('gaussian', sigma=0.01)
@@ -246,7 +248,7 @@ class SiliconSCF:
                 evecs=self.evecs,
                 evals=self.evals,
                 tol=1e-8,
-                max_iter=50
+                max_iter=200
             )
             
             # Compute new density
@@ -402,6 +404,9 @@ class SiliconSCF:
 
 def main():
     """Run silicon calculation."""
+    # Fixed seed so the random initial wavefunctions -- and hence the
+    # SCF trajectory printed in the book -- are reproducible.
+    np.random.seed(42)
     print("\n" + "#" * 60)
     print("# Educational Silicon DFT Calculation")
     print("#" * 60)

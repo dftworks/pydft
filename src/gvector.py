@@ -193,9 +193,7 @@ class GVector:
         n_fft = (factor * max_miller + 1).astype(int)
 
         # Round up to next power of 2 or product of small primes for efficiency
-        n_fft = np.array([self._next_fft_size(n) for n in n_fft])
-
-        return tuple(n_fft)
+        return tuple(self._next_fft_size(n) for n in n_fft)
     
     @staticmethod
     def _next_fft_size(n):

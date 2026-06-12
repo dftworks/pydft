@@ -78,17 +78,18 @@ class SCFSolver:
     """
     
     def __init__(self, lattice, ecut, n_bands, n_electrons,
-                 external_potential=None, mixer='broyden'):
+                 external_potential=None, mixer='linear'):
         """
         Initialize SCF solver.
-        
+
         Args:
             lattice: Lattice object
             ecut: Energy cutoff in Hartree
             n_bands: Number of bands to compute
             n_electrons: Number of electrons
             external_potential: Optional external potential V_ext(r) on FFT grid
-            mixer: 'broyden' or 'linear'
+            mixer: 'linear' (default; simplest, needs a small alpha) or
+                   'broyden' (faster convergence using SCF history)
         """
         self.lattice = lattice
         self.ecut = ecut
