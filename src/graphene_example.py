@@ -34,7 +34,7 @@ from src.ewald import Ewald
 from src.smearing import create_smearing, find_fermi_level
 from src.hamiltonian import Hamiltonian, g_to_r
 from src.eigensolver import PCGEigensolver, random_initial_guess
-from src.mixing import BroydenMixer
+from src.mixing import LinearMixer
 
 
 def create_graphene_crystal():
@@ -200,8 +200,9 @@ class GrapheneSCF:
         # Eigensolver
         self.eigensolver = PCGEigensolver(self.npw, self.n_bands)
 
-        # Mixer - Broyden mixing for fast, stable SCF convergence
-        self.mixer = BroydenMixer(alpha=0.7, n_history=8)
+        # Mixer - simple linear mixing with a small alpha, consistent
+        # with the other examples (converges in ~20 iterations).
+        self.mixer = LinearMixer(alpha=0.1)
 
         # Smearing (Gaussian, broader than for Si because graphene is a semimetal)
         self.smearing = create_smearing('gaussian', sigma=0.02)
@@ -438,6 +439,8 @@ def print_brillouin_zone_info():
 
 def main():
     """Run graphene calculation."""
+    # Fixed seed for reproducible SCF output (see silicon example).
+    np.random.seed(42)
     print("\n" + "#" * 60)
     print("# Educational Graphene DFT Calculation")
     print("#" * 60)

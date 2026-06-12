@@ -11,7 +11,7 @@ The key computational idea:
 - K-point mesh: 1 x 1 x n3 (dense only along the tube axis)
 
 A (4,0) zigzag CNT is chosen because it is the smallest zigzag tube that
-gives a reasonable structure (16 atoms per unit cell, diameter ~ 3.1 Angstrom).
+gives a reasonable structure (8 atoms per unit cell, diameter ~ 3.1 Angstrom).
 
 Nanotube classification:
 - Zigzag (n,0): metallic if n is a multiple of 3, else semiconducting
@@ -35,7 +35,7 @@ from src.ewald import Ewald
 from src.smearing import create_smearing, find_fermi_level
 from src.hamiltonian import Hamiltonian, g_to_r
 from src.eigensolver import PCGEigensolver, random_initial_guess
-from src.mixing import BroydenMixer
+from src.mixing import LinearMixer
 
 
 def create_cnt_crystal(n=4, m=0, vacuum=18.0):
@@ -240,10 +240,10 @@ class CarbonNanotubeSCF:
         # Hamiltonian
         self.hamiltonian = Hamiltonian(self.gvec, self.volume)
 
-        # Mixer - Broyden mixing with a conservative alpha: the CNT cell has
-        # many atoms and large vacuum regions, which make the SCF stiffer
-        # than for bulk silicon or flat graphene.
-        self.mixer = BroydenMixer(alpha=0.5, n_history=8)
+        # Mixer - simple linear mixing. The CNT cell (many atoms, vacuum in
+        # two directions) is the stiffest system in the examples; a small
+        # alpha keeps the density update gentle enough to avoid sloshing.
+        self.mixer = LinearMixer(alpha=0.1)
 
         # Smearing
         self.smearing = create_smearing('gaussian', sigma=0.02)
@@ -443,6 +443,8 @@ class CarbonNanotubeSCF:
 
 def main():
     """Run carbon nanotube calculation."""
+    # Fixed seed for reproducible SCF output (see silicon example).
+    np.random.seed(42)
     print("\n" + "#" * 60)
     print("# Educational Carbon Nanotube DFT Calculation")
     print("#" * 60)
