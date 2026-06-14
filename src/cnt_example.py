@@ -10,8 +10,8 @@ The key computational idea:
 - Large vacuum in x and y prevents interaction between periodic images
 - K-point mesh: 1 x 1 x n3 (dense only along the tube axis)
 
-A (4,0) zigzag CNT is chosen because it is the smallest zigzag tube that
-gives a reasonable structure (8 atoms per unit cell, diameter ~ 3.1 Angstrom).
+A (4,0) zigzag CNT is chosen as a small but representative tube
+(16 atoms per unit cell, diameter ~ 3.1 Angstrom).
 
 Nanotube classification:
 - Zigzag (n,0): metallic if n is a multiple of 3, else semiconducting
@@ -47,8 +47,8 @@ def create_cnt_crystal(n=4, m=0, vacuum=18.0):
 
     For a zigzag (n,0) tube:
         Diameter:  d = n * a_CC * sqrt(3) / pi
-        Period:    T = sqrt(3) * a_CC   (= a_graphene)
-        Atoms per cell: 2*n
+        Period:    T = 3 * a_CC
+        Atoms per cell: 4*n  (four rings of n atoms)
 
     where a_CC = 1.42 Angstrom is the C-C bond length.
 
@@ -68,7 +68,7 @@ def create_cnt_crystal(n=4, m=0, vacuum=18.0):
 
     # Tube diameter and translational period
     diameter = n * a_cc * np.sqrt(3.0) / np.pi
-    T = np.sqrt(3.0) * a_cc  # period along the tube axis
+    T = 3.0 * a_cc  # translational period of a zigzag (n,0) tube
 
     # Tetragonal supercell: tube centred in the xy-plane
     box_xy = diameter + vacuum  # side length in x and y
@@ -82,35 +82,30 @@ def create_cnt_crystal(n=4, m=0, vacuum=18.0):
     crystal = Crystal(lattice)
 
     # Generate atom positions by rolling up the graphene strip.
-    # A zigzag (n,0) tube has 2*n atoms per translational period,
-    # arranged in two rings at z = 0 and z = T/3.
+    # A zigzag (n,0) tube has 4*n atoms per translational period T = 3*a_CC,
+    # arranged in four rings of n atoms. Within one period the rings sit at
+    #   z = 0,  a_CC/2,  3*a_CC/2,  2*a_CC
+    # The z=0 and z=2*a_CC rings share the angular offset 0; the z=a_CC/2 and
+    # z=3*a_CC/2 rings are rotated by half a step (pi/n). The vertical bonds
+    # (z=a_CC/2 -> 3*a_CC/2, and z=2*a_CC -> 3*a_CC of the next period) and the
+    # diagonal bonds together reproduce the honeycomb in the flat limit.
     radius = diameter / 2.0
 
+    # (z offset in Bohr, angular offset in units of the n-fold step)
+    rings = [
+        (0.0,           0.0),
+        (0.5 * a_cc,    0.5),
+        (1.5 * a_cc,    0.5),
+        (2.0 * a_cc,    0.0),
+    ]
+
     for i in range(n):
-        # Ring 1 at z = 0
-        theta1 = 2.0 * np.pi * i / n
-        x1 = radius * np.cos(theta1) + box_xy / 2.0
-        y1 = radius * np.sin(theta1) + box_xy / 2.0
-        z1 = 0.0
-
-        # Convert to fractional
-        fx1 = x1 / box_xy
-        fy1 = y1 / box_xy
-        fz1 = z1 / T
-
-        crystal.add_atom('C', [fx1, fy1, fz1], zion=4)
-
-        # Ring 2 at z = T/3, rotated by pi/n
-        theta2 = 2.0 * np.pi * (i + 0.5) / n
-        x2 = radius * np.cos(theta2) + box_xy / 2.0
-        y2 = radius * np.sin(theta2) + box_xy / 2.0
-        z2 = T / 3.0
-
-        fx2 = x2 / box_xy
-        fy2 = y2 / box_xy
-        fz2 = z2 / T
-
-        crystal.add_atom('C', [fx2, fy2, fz2], zion=4)
+        for z_off, phi_off in rings:
+            theta = 2.0 * np.pi * (i + phi_off) / n
+            x = radius * np.cos(theta) + box_xy / 2.0
+            y = radius * np.sin(theta) + box_xy / 2.0
+            frac = [x / box_xy, y / box_xy, z_off / T]
+            crystal.add_atom('C', frac, zion=4)
 
     return crystal, T
 
@@ -164,7 +159,7 @@ class CarbonNanotubeSCF:
     This example highlights:
     - 1D periodic geometry (tube axis along z, vacuum in x and y)
     - K-point mesh dense only along the tube axis (1 x 1 x n3)
-    - More atoms per cell than silicon or graphene (2*n for a (n,0) tube)
+    - More atoms per cell than silicon or graphene (4*n for a (n,0) tube)
     """
 
     def __init__(self, n=4, ecut=3.0, n_extra_bands=4,
@@ -243,7 +238,7 @@ class CarbonNanotubeSCF:
         # Mixer - simple linear mixing. The CNT cell (many atoms, vacuum in
         # two directions) is the stiffest system in the examples; a small
         # alpha keeps the density update gentle enough to avoid sloshing.
-        self.mixer = LinearMixer(alpha=0.1)
+        self.mixer = LinearMixer(alpha=0.05)
 
         # Smearing
         self.smearing = create_smearing('gaussian', sigma=0.02)
@@ -406,7 +401,7 @@ class CarbonNanotubeSCF:
 
         n_occ = self.n_electrons // 2
 
-        print(f"\nMaterial: ({self.crystal.natoms // 2},0) Carbon Nanotube")
+        print(f"\nMaterial: ({self.crystal.natoms // 4},0) Carbon Nanotube")
         print(f"Total energy: {energy:.8f} Ha ({energy * HA_TO_EV:.6f} eV)")
         print(f"Energy per atom: {energy/self.natoms:.8f} Ha "
               f"({energy/self.natoms * HA_TO_EV:.6f} eV)")
@@ -431,7 +426,7 @@ class CarbonNanotubeSCF:
             cbm = self.evals[n_occ]
             gap = cbm - vbm
             print(f"\nHOMO-LUMO gap: {gap:.4f} Ha ({gap * HA_TO_EV:.4f} eV)")
-            if self.crystal.natoms // 2 % 3 == 0:
+            if self.crystal.natoms // 4 % 3 == 0:
                 print("(Zigzag tube with n divisible by 3: "
                       "expected to be metallic)")
             else:
@@ -464,7 +459,7 @@ def main():
         kpts_mesh=(1, 1, 4)    # Dense only along tube axis
     )
 
-    energy = cnt_scf.run(max_iter=60, tol=1e-4)
+    energy = cnt_scf.run(max_iter=120, tol=1e-4)
 
     print("\n" + "#" * 60)
     print("# Calculation Complete!")

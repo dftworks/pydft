@@ -37,7 +37,9 @@ class KPoints:
         Args:
             lattice: Lattice object
             mesh: Tuple (n1, n2, n3) specifying mesh density
-            shift: Optional tuple (s1, s2, s3) for mesh shift (0 or 0.5)
+            shift: Optional tuple (s1, s2, s3) of integer shift flags
+                   (0 = unshifted, 1 = half-grid shift). This matches the
+                   convention used by generate_monkhorst_pack in kpoint_scf.py.
         """
         self.lattice = lattice
         self.mesh = mesh
@@ -53,23 +55,24 @@ class KPoints:
     def _generate_mp_mesh(self):
         """
         Generate Monkhorst-Pack mesh.
-        
-        k_i = (2*n - N - 1) / (2*N) + s_i
-        
-        where n = 1, ..., N and s_i is the shift.
+
+        k_i = (2*n - N - 1) / (2*N) + 0.5 * s_i / N
+
+        where n = 1, ..., N and s_i in {0, 1} is the integer shift flag
+        (s_i = 1 applies a half-grid shift of 1/(2N)).
         """
         n1, n2, n3 = self.mesh
         s1, s2, s3 = self.shift
-        
+
         k_points = []
-        
+
         for i in range(n1):
             for j in range(n2):
                 for k in range(n3):
                     # Monkhorst-Pack formula
-                    k1 = (2*i - n1 + 1) / (2*n1) + s1/n1
-                    k2 = (2*j - n2 + 1) / (2*n2) + s2/n2
-                    k3 = (2*k - n3 + 1) / (2*n3) + s3/n3
+                    k1 = (2*i - n1 + 1) / (2*n1) + 0.5*s1/n1
+                    k2 = (2*j - n2 + 1) / (2*n2) + 0.5*s2/n2
+                    k3 = (2*k - n3 + 1) / (2*n3) + 0.5*s3/n3
                     
                     k_points.append([k1, k2, k3])
         
@@ -171,12 +174,12 @@ def monkhorst_pack(lattice, n1, n2, n3, shift=False):
     Args:
         lattice: Lattice object
         n1, n2, n3: Mesh density in each direction
-        shift: If True, use (0.5, 0.5, 0.5) shift
-    
+        shift: If True, apply a half-grid shift (flags (1, 1, 1))
+
     Returns:
         KPoints object
     """
-    s = (0.5, 0.5, 0.5) if shift else (0, 0, 0)
+    s = (1, 1, 1) if shift else (0, 0, 0)
     return KPoints(lattice, (n1, n2, n3), s)
 
 
