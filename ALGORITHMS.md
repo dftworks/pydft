@@ -121,7 +121,7 @@ Algorithm: SCF Loop
    e. Solve eigenvalue problem: H|psi_i> = eps_i|psi_i>
    f. Compute new density: rho_new(r) = sum_i f_i |psi_i(r)|^2
    g. Mix densities: rho_next = mix(rho_old, rho_new)
-   h. Check convergence: |E_new - E_old| < epsilon
+   h. Check both energy change and RMS output-minus-input density residual
 4. Compute forces and stresses (if needed)
 ```
 
@@ -590,7 +590,7 @@ $$f(\varepsilon) = \frac{1}{2}\text{erfc}\left(\frac{\varepsilon - \mu}{\sigma}\
 
 First-order correction for better integration accuracy:
 
-$$f_{MP1}(\varepsilon) = \frac{1}{2}\text{erfc}(x) - \frac{x e^{-x^2}}{\sqrt{\pi}}$$
+$$f_{MP1}(\varepsilon) = \frac{1}{2}\text{erfc}(x) - \frac{x e^{-x^2}}{2\sqrt{\pi}}$$
 
 where $x = (\varepsilon - \mu)/\sigma$.
 
@@ -688,3 +688,23 @@ Output: Total energy, Eigenvalues, Forces, Stress
 3. Johnson, D. D. "Modified Broyden's method for accelerating convergence in self-consistent calculations" Phys. Rev. B 38, 12807 (1988)
 4. Teter, M. P., Payne, M. C., & Allan, D. C. "Solution of Schrodinger's equation for large systems" Phys. Rev. B 40, 12255 (1989)
 5. Ewald, P. P. "Die Berechnung optischer und elektrostatischer Gitterpotentiale" Ann. Phys. 369, 253 (1921)
+
+
+### Numerical conventions and regression checks
+
+The orbital basis uses the dual-lattice bound `|m_i| <= Gmax*|a_i|/(2*pi)`,
+which remains complete for nonorthogonal cells. Density products require a
+separate reciprocal cutoff of `4*ecut` and a grid resolving twice the orbital
+frequency; `GVector.get_fft_grid_size()` therefore defaults to factor 4.
+
+The main Gamma and k-point SCF drivers evaluate the direct output-orbital
+internal energy. They expose `converged`, `iterations`, and `density_residual`
+and warn on iteration exhaustion. Their energy does not include `-TS`.
+The occupations returned by Methfessel-Paxton smearing are signed integration
+weights: clipping them destroys the moment cancellation and charge balance.
+
+Ewald stress uses `-dE/dstrain/volume` at fixed fractional positions and fixed
+splitting parameter. All real, reciprocal and background terms are included.
+For tests of these identities, run each `tests/test_*.py` module first and then
+`python3 -m pytest -q`. The companion book explains the Fourier, projector,
+energy and smearing conventions in the corresponding chapters.

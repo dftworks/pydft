@@ -30,7 +30,9 @@ def compute_density(evecs, occupations, gvector, fft_shape, volume,
     
     Notes:
         Occupations are expected in the "spin-paired" convention used elsewhere
-        in this codebase (0..2 per spatial orbital).
+        in this codebase (0..2 per spatial orbital for FD/fixed filling).
+        Methfessel-Paxton weights may lie outside this interval and must retain
+        their signs so that the weighted electron count is preserved.
 
     Returns:
         rho_r: Electron density in real space, shape fft_shape
@@ -57,7 +59,7 @@ def compute_density(evecs, occupations, gvector, fft_shape, volume,
             )
         
         for iband in range(nbands):
-            if occupations[iband] < 1e-10:
+            if abs(occupations[iband]) < 1e-10:
                 continue
             
             # psi(G) -> psi(r), then accumulate f_n |psi_n(r)|^2.
@@ -94,7 +96,7 @@ def compute_density(evecs, occupations, gvector, fft_shape, volume,
             for iband in range(nbands):
                 occ = occupations[ik, iband] if occupations.ndim > 1 else occupations[iband]
                 
-                if occ < 1e-10:
+                if abs(occ) < 1e-10:
                     continue
                 
                 # Weighted k-point contribution: w_k f_nk |psi_nk(r)|^2.
@@ -221,30 +223,20 @@ def compute_density_gradient(rho_r, gvector, fft_shape, lattice):
         grad_rho: Gradient components (3, n1, n2, n3)
         grad_rho_mag: |grad(rho)|, shape (n1, n2, n3)
     """
-    n_fft = np.prod(fft_shape)
-    
-    # FFT to G-space
+    rho_r = np.asarray(rho_r, dtype=float)
+    if rho_r.shape != tuple(fft_shape):
+        raise ValueError("rho_r shape must match fft_shape.")
+    # Differentiate every density mode on the FFT grid, not just orbital G's.
+    # NumPy's inverse FFT supplies the 1/N missing from an explicit inverse sum.
+    indices = np.meshgrid(*(np.fft.fftfreq(n) * n for n in fft_shape),
+                          indexing='ij')
     rho_fft = np.fft.fftn(rho_r)
-    
-    # Gradient in G-space: i*G * rho(G)
-    grad_rho = np.zeros((3,) + fft_shape, dtype=float)
-    
-    for ig in range(gvector.npw):
-        m = gvector.miller[ig]
-        G = gvector.gvecs[ig]
-        
-        # Get FFT indices
-        i1 = m[0] % fft_shape[0]
-        i2 = m[1] % fft_shape[1]
-        i3 = m[2] % fft_shape[2]
-        
-        # i * G * rho(G)
-        for d in range(3):
-            grad_rho[d] += np.real(1j * G[d] * rho_fft[i1, i2, i3] * 
-                                   np.exp(2j * np.pi * (m[0]*np.arange(fft_shape[0])[:, None, None]/fft_shape[0] +
-                                                        m[1]*np.arange(fft_shape[1])[None, :, None]/fft_shape[1] +
-                                                        m[2]*np.arange(fft_shape[2])[None, None, :]/fft_shape[2])))
-    
+    grad_rho = np.empty((3,) + tuple(fft_shape))
+    for d in range(3):
+        gd = sum(indices[i] * lattice.reciprocal_vectors[i, d]
+                 for i in range(3))
+        grad_rho[d] = np.fft.ifftn(1j * gd * rho_fft).real
+
     # Magnitude
     grad_rho_mag = np.sqrt(np.sum(grad_rho**2, axis=0))
     

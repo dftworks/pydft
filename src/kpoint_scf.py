@@ -11,6 +11,8 @@ periodic-system ingredients explicit:
 
 import numpy as np
 from .constants import HA_TO_EV
+from .gvector import GVector
+import warnings
 from .xc import lda_xc, compute_xc_energy, compute_xc_potential_energy
 from .hartree import compute_hartree_potential, compute_hartree_energy
 from .hamiltonian import Hamiltonian, g_to_r
@@ -170,7 +172,11 @@ class KPointSCF:
         self.ewald_energy = ewald_energy
         
         self.npw = gvec.npw
-        self.fft_shape = gvec.get_fft_grid_size()
+        if (not isinstance(n_bands, (int, np.integer)) or not 1 <= n_bands <= self.npw
+                or not np.isfinite(n_electrons) or not 0 <= n_electrons <= 2*n_bands):
+            raise ValueError("Require 1 <= n_bands <= npw and 0 <= n_electrons <= 2*n_bands.")
+        self.density_gvec = GVector(lattice, 4 * gvec.ecut)
+        self.fft_shape = self.density_gvec.get_fft_grid_size(factor=2)
         self.n_fft = np.prod(self.fft_shape)
         
         # Reciprocal lattice vectors
@@ -195,7 +201,7 @@ class KPointSCF:
         self.smearing_name = None
         
         # Hamiltonian template
-        self.hamiltonian = Hamiltonian(gvec, volume)
+        self.hamiltonian = Hamiltonian(gvec, volume, fft_shape=self.fft_shape)
     
     def setup_kpoints(self, nk1, nk2, nk3, shift=(0.0, 0.0, 0.0), 
                       use_symmetry=True):
@@ -207,6 +213,8 @@ class KPointSCF:
             shift: Grid shift
             use_symmetry: Whether to reduce by time-reversal symmetry
         """
+        if any(not isinstance(n, (int, np.integer)) or n < 1 for n in (nk1, nk2, nk3)):
+            raise ValueError("K-mesh dimensions must be positive integers.")
         # Step 1: build full Monkhorst-Pack mesh.
         kpoints_frac, weights = generate_monkhorst_pack(nk1, nk2, nk3, shift)
         
@@ -246,8 +254,8 @@ class KPointSCF:
     def _build_potential(self):
         """Build effective local potential from current density."""
         # Hartree: rho(G) -> V_H(G) -> V_H(r)
-        v_hartree_g = compute_hartree_potential(self.rho_g, self.gvec.norms)
-        v_hartree_fft = self.gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
+        v_hartree_g = compute_hartree_potential(self.rho_g, self.density_gvec.norms)
+        v_hartree_fft = self.density_gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
         self._v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
         
         # XC: local functional in real space.
@@ -321,7 +329,7 @@ class KPointSCF:
         
         for kdata in self.kpoints:
             for n in range(self.n_bands):
-                if kdata.occupations[n] < 1e-10:
+                if abs(kdata.occupations[n]) < 1e-10:
                     continue
                 
                 psi_r = g_to_r(kdata.evecs[:, n], self.gvec, 
@@ -350,42 +358,6 @@ class KPointSCF:
         evals = np.array([kdata.evals for kdata in self.kpoints], dtype=float)
         weights = np.array([kdata.weight for kdata in self.kpoints], dtype=float)
 
-        smearing_key = str(smearing).lower()
-        if smearing_key == 'fixed':
-            # Zero-temperature filling by sorting all (k, band) levels globally.
-            # Capacity per state is 2*w_k electrons in spin-paired mode.
-            occupations = np.zeros_like(evals)
-            state_list = []
-            for ik, kdata in enumerate(self.kpoints):
-                for ib in range(self.n_bands):
-                    state_list.append((kdata.evals[ib], ik, ib, kdata.weight))
-            state_list.sort(key=lambda item: item[0])
-
-            remaining = float(self.n_electrons)
-            fermi_level = state_list[-1][0] if state_list else 0.0
-            for energy, ik, ib, wk in state_list:
-                capacity = 2.0 * wk
-                if remaining <= 1e-12:
-                    break
-                fill = min(capacity, remaining)
-                # Store occupation in [0, 2] convention (independent of weight).
-                occupations[ik, ib] = fill / wk
-                remaining -= fill
-                fermi_level = energy
-
-            if remaining > 1e-8:
-                raise RuntimeError(
-                    "Not enough states in the current basis to place all electrons."
-                )
-
-            for ik, kdata in enumerate(self.kpoints):
-                kdata.occupations = occupations[ik]
-
-            self.fermi_level = fermi_level
-            self.smearing_name = "Fixed (global filling)"
-            return
-
-        # Finite-temperature or analytic smearing path.
         smearing_obj = create_smearing(smearing, temperature=temperature, sigma=sigma)
         fermi_level, occupations = find_fermi_level(
             eigenvalues=evals,
@@ -421,27 +393,41 @@ class KPointSCF:
         return e_band
     
     def _compute_total_energy(self):
-        """Compute total energy with standard band-energy corrections."""
-        e_band = self._compute_band_energy()
-        
-        e_hartree = compute_hartree_energy(self.rho_g, self.gvec.norms, self.volume)
-        
-        rho_real = np.maximum(np.real(self.rho_r), 1e-20)
-        e_xc = compute_xc_energy(rho_real, self._exc_r, self.volume, self.n_fft)
-        e_vxc = compute_xc_potential_energy(rho_real, self._v_xc_r, self.volume, self.n_fft)
-        
-        e_total = e_band - e_hartree + e_xc - e_vxc + self.ewald_energy
-        
-        return e_total
-    
+        """Direct output-orbital internal energy, valid away from SCF.
+
+        E = T + E_local + E_nonlocal + E_H[rho] + E_xc[rho] + E_ion.
+        No input-potential eigenvalues enter this expression. Smearing controls
+        occupations; this is internal energy, not the finite-temperature free
+        energy. See pydft-book/totalenergy.tex and scf.tex.
+        """
+        e_kinetic = 0.0
+        e_nonlocal = 0.0
+        for kdata in self.kpoints:
+            for n, occ in enumerate(kdata.occupations):
+                psi = kdata.evecs[:, n]
+                e_kinetic += kdata.weight * occ * np.dot(np.abs(psi)**2,
+                                                        kdata.kg_squared)
+                if self.nlpot is not None:
+                    e_nonlocal += kdata.weight * occ * np.vdot(
+                        psi, self.nlpot.apply_vnl(psi, kdata.full_projectors)).real
+        vloc_fft = self.gvec.map_to_fft_grid(self.vloc_g, self.fft_shape)
+        vloc_r = np.fft.ifftn(vloc_fft).real * self.n_fft
+        e_local = np.sum(self.rho_r * vloc_r) * self.volume / self.n_fft
+        e_hartree = compute_hartree_energy(self.rho_g, self.density_gvec.norms,
+                                          self.volume)
+        rho_real = np.maximum(self.rho_r.real, 1e-20)
+        _, exc = lda_xc(rho_real)
+        e_xc = compute_xc_energy(rho_real, exc, self.volume, self.n_fft)
+        return e_kinetic + e_local + e_nonlocal + e_hartree + e_xc + self.ewald_energy
+
     def _r_to_g(self, arr_r):
         """Transform from real space to G-space."""
         arr_fft = np.fft.fftn(arr_r) / self.n_fft
-        return self.gvec.map_from_fft_grid(arr_fft)
+        return self.density_gvec.map_from_fft_grid(arr_fft)
     
     def _g_to_r(self, arr_g):
         """Transform from G-space to real space."""
-        arr_fft = self.gvec.map_to_fft_grid(arr_g, self.fft_shape)
+        arr_fft = self.density_gvec.map_to_fft_grid(arr_g, self.fft_shape)
         return np.real(np.fft.ifftn(arr_fft) * self.n_fft)
     
     def run(
@@ -453,6 +439,7 @@ class KPointSCF:
         smearing='fd',
         temperature=300.0,
         sigma=0.01,
+        density_tol=1e-7,
     ):
         """
         Run SCF calculation with k-point sampling.
@@ -465,10 +452,19 @@ class KPointSCF:
             smearing: Occupation scheme ('fd', 'gaussian', 'mp', 'fixed', ...)
             temperature: Electronic temperature (K) used by FD smearing
             sigma: Smearing width (Ha) for Gaussian/MP schemes
+            density_tol: RMS density residual tolerance (electrons/Bohr^3)
             
         Returns:
             Total energy in Hartree
         """
+        if (not isinstance(max_iter, (int, np.integer)) or max_iter < 1
+                or not np.isfinite(tol) or tol <= 0
+                or not np.isfinite(density_tol) or density_tol <= 0
+                or not np.isfinite(mixing_alpha) or not 0 < mixing_alpha <= 1):
+            raise ValueError("Use positive tolerances, max_iter >= 1 and 0 < mixing_alpha <= 1.")
+        self.converged = False
+        self.iterations = 0
+        self.density_residual = np.inf
         if self.nk == 0:
             raise RuntimeError("No k-points set up. Call setup_kpoints() first.")
         
@@ -493,7 +489,7 @@ class KPointSCF:
         mixer = LinearMixer(alpha=mixing_alpha)
         
         energy_old = 0.0
-        energy_history = []
+
         
         if verbose:
             print(f"\n{'Iter':>4} {'E_total (Ha)':>14} {'dE (Ha)':>12}")
@@ -516,14 +512,16 @@ class KPointSCF:
             rho_r_new = self._compute_density()
             rho_g_new = self._r_to_g(rho_r_new)
             
-            # Energy helpers read self.rho_{r,g}; temporarily point them at rho_new.
+            # Evaluate energy and retain a consistent output state, including
+            # on iteration exhaustion. Mix only if another iteration follows.
+            self.iterations = scf_iter
+            self.density_residual = np.sqrt(np.mean((rho_r_new - self.rho_r)**2))
             rho_g_old = self.rho_g
             self.rho_g = rho_g_new
             self.rho_r = rho_r_new
             self._build_potential()
             
             e_total = self._compute_total_energy()
-            energy_history.append(e_total)
             
             de = abs(e_total - energy_old)
             
@@ -531,28 +529,26 @@ class KPointSCF:
                 print(f"{scf_iter:4d} {e_total:14.8f} {de:12.2e}")
             
             # Check convergence
-            if de < tol and scf_iter > 3:
+            if de < tol and self.density_residual < density_tol and scf_iter > 1:
+                self.converged = True
                 if verbose:
                     print("-" * 35)
                     print(f"SCF converged in {scf_iter} iterations")
                 break
             
-            # Check oscillation
-            if scf_iter > 10 and len(energy_history) >= 6:
-                recent = energy_history[-6:]
-                if np.std(recent) < tol * 10:
-                    if verbose:
-                        print("-" * 35)
-                        print(f"SCF converged (oscillation) in {scf_iter} iterations")
-                    e_total = np.mean(recent)
-                    break
-            
+            if scf_iter == max_iter:
+                break
+
             # Phase 5: mix and continue the fixed-point iteration.
             self.rho_g = mixer.mix(rho_g_old, rho_g_new)
             self.rho_r = self._g_to_r(self.rho_g)
             
             energy_old = e_total
         
+        if not self.converged:
+            warnings.warn(f"SCF did not converge after {self.iterations} iterations; "
+                          f"density residual={self.density_residual:.3g} e/Bohr^3",
+                          RuntimeWarning, stacklevel=2)
         self.total_energy = e_total
         return e_total
     

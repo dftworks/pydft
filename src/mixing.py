@@ -164,8 +164,8 @@ class BroydenMixer:
             rho_next: Mixed density for next iteration
         """
         # Ensure arrays are 1D complex
-        rho_in = np.asarray(rho_in).flatten()
-        rho_out = np.asarray(rho_out).flatten()
+        rho_in = np.asarray(rho_in, dtype=complex).flatten()
+        rho_out = np.asarray(rho_out, dtype=complex).flatten()
         
         # Store in history
         self.history_in.append(rho_in.copy())
@@ -332,8 +332,8 @@ class PulayMixer:
         Returns:
             rho_next: Mixed density
         """
-        rho_in = np.asarray(rho_in).flatten()
-        rho_out = np.asarray(rho_out).flatten()
+        rho_in = np.asarray(rho_in, dtype=complex).flatten()
+        rho_out = np.asarray(rho_out, dtype=complex).flatten()
         
         # Residual
         residual = rho_out - rho_in

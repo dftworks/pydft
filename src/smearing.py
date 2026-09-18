@@ -12,7 +12,7 @@ Reference:
 """
 
 import numpy as np
-from scipy.special import erfc
+from scipy.special import erfc, xlogy
 from .constants import BOLTZMANN_CONSTANT, HA_TO_EV
 
 
@@ -34,6 +34,8 @@ class FermiDirac:
         Args:
             temperature: Electronic temperature in Kelvin
         """
+        if not np.isfinite(temperature) or temperature <= 0:
+            raise ValueError("Temperature must be finite and positive; use fixed for T=0.")
         self.temperature = temperature
         self.kbt = max(BOLTZMANN_CONSTANT * temperature, 1e-10)
     
@@ -71,13 +73,14 @@ class FermiDirac:
         S = -kT * sum_i [f*ln(f) + (1-f)*ln(1-f)]
         
         Returns:
-            Entropy contribution to free energy (Hartree)
+            Positive T*S in Hartree; subtract this from internal energy
+            to obtain F=E-T*S. Input occupations are per spin in [0, 1].
         """
-        # Avoid log(0)
-        f = np.clip(occupations, 1e-20, 1 - 1e-20)
-        s = -self.kbt * np.sum(f * np.log(f) + (1 - f) * np.log(1 - f))
-        return s
-    
+        f = np.asarray(occupations, dtype=float)
+        if not np.all(np.isfinite(f)) or np.any((f < 0) | (f > 1)):
+            raise ValueError("Entropy expects finite per-spin occupations in [0, 1].")
+        return -self.kbt * np.sum(xlogy(f, f) + xlogy(1-f, 1-f))
+
     @property
     def name(self):
         return "Fermi-Dirac"
@@ -85,7 +88,7 @@ class FermiDirac:
 
 class Gaussian:
     """
-    Gaussian smearing (cold smearing).
+    Gaussian smearing (distinct from Marzari-Vanderbilt cold smearing).
     
     f(E) = 0.5 * erfc((E - mu) / sigma)
     
@@ -100,6 +103,8 @@ class Gaussian:
         Args:
             sigma: Smearing width in Hartree (typical: 0.01-0.1 Ha)
         """
+        if not np.isfinite(sigma) or sigma <= 0:
+            raise ValueError("Smearing width must be finite and positive.")
         self.sigma = sigma
     
     def occupation(self, energy, fermi_level):
@@ -128,13 +133,13 @@ class Gaussian:
 
 class MethfesselPaxton:
     """
-    Methfessel-Paxton smearing (order 1).
+    Methfessel-Paxton smearing (orders 1 and 2).
     
     Provides better integration accuracy than Gaussian smearing
     while still having fast k-point convergence.
     
     The first-order MP smearing function is:
-    f(x) = 0.5*erfc(x) - exp(-x^2) * x / sqrt(pi)
+    f(x) = 0.5*erfc(x) - exp(-x^2) * x / (2*sqrt(pi))
     """
     
     def __init__(self, sigma=0.01, order=1):
@@ -145,7 +150,11 @@ class MethfesselPaxton:
             sigma: Smearing width in Hartree
             order: Order of the method (1 or 2)
         """
+        if not np.isfinite(sigma) or sigma <= 0:
+            raise ValueError("Smearing width must be finite and positive.")
         self.sigma = sigma
+        if order not in (1, 2):
+            raise ValueError("Methfessel-Paxton order must be 1 or 2.")
         self.order = order
     
     def occupation(self, energy, fermi_level):
@@ -165,16 +174,17 @@ class MethfesselPaxton:
         
         if self.order >= 1:
             # 1st order correction
-            A1 = -1.0 / np.sqrt(np.pi)
+            A1 = -0.5 / np.sqrt(np.pi)
             f += A1 * x * np.exp(-x**2)
         
         if self.order >= 2:
             # 2nd order correction
-            A2 = -0.5 / np.sqrt(np.pi)
-            H2 = 4.0 * x**2 - 2.0  # Hermite polynomial
-            f += A2 * H2 * np.exp(-x**2)
+            A2 = 1.0 / (32 * np.sqrt(np.pi))
+            H3 = 8.0 * x**3 - 12.0 * x  # Odd Hermite polynomial
+            f += A2 * H3 * np.exp(-x**2)
         
-        return np.clip(f, 0.0, 1.0)
+        # Signed overshoot cancels integration-error moments; do not clip.
+        return f
     
     def entropy(self, occupations):
         """Entropy correction term."""
@@ -246,8 +256,7 @@ def create_smearing(scheme, **kwargs):
         return FixedOccupation()
     
     else:
-        print(f"Warning: Unknown smearing scheme '{scheme}', using Fermi-Dirac")
-        return FermiDirac()
+        raise ValueError(f"Unknown smearing scheme: {scheme}")
 
 
 def find_fermi_level(eigenvalues, weights, n_electrons, smearing, 
@@ -271,47 +280,88 @@ def find_fermi_level(eigenvalues, weights, n_electrons, smearing,
         fermi_level: Fermi level in Hartree
         occupations: Occupation numbers for each eigenvalue
     """
-    # Flatten eigenvalues if needed
-    if eigenvalues.ndim == 1:
-        eigs = eigenvalues
-        wts = np.ones(len(eigenvalues))
-    else:
-        nk, nbands = eigenvalues.shape
-        eigs = eigenvalues.flatten()
-        if np.isscalar(weights):
-            wts = np.ones(nk * nbands) / nk
-        else:
-            wts = np.repeat(weights, nbands)
-    
-    # Initial bounds
-    e_min = np.min(eigs) - 1.0
-    e_max = np.max(eigs) + 1.0
-    
-    def count_electrons(mu):
-        occ = smearing.occupation_array(eigs, mu)
-        return spin_factor * np.sum(wts * occ)
-    
-    # Bisection search
-    for _ in range(max_iter):
-        mu = 0.5 * (e_min + e_max)
-        n_e = count_electrons(mu)
-        
-        if abs(n_e - n_electrons) < tol:
+    eigenvalues = np.asarray(eigenvalues, dtype=float)
+    if (eigenvalues.ndim not in (1, 2) or eigenvalues.size == 0
+            or not np.all(np.isfinite(eigenvalues))):
+        raise ValueError("Eigenvalues must be a finite nonempty 1D or 2D array.")
+    if (not np.isfinite(spin_factor) or spin_factor <= 0
+            or not np.isfinite(tol) or tol <= 0
+            or not isinstance(max_iter, (int, np.integer)) or max_iter < 1):
+        raise ValueError("Positive spin_factor, tol and integer max_iter are required.")
+    nk = 1 if eigenvalues.ndim == 1 else eigenvalues.shape[0]
+    if np.isscalar(weights):
+        weights = np.full(nk, float(weights) / nk)
+    weights = np.asarray(weights, dtype=float)
+    if (weights.shape != (nk,) or not np.all(np.isfinite(weights))
+            or np.any(weights < 0) or weights.sum() <= 0):
+        raise ValueError("K-point weights must be finite, nonnegative and shaped (nk,).")
+    eigs = eigenvalues.ravel()
+    wts = np.repeat(weights, eigenvalues.shape[-1])
+    capacity = spin_factor * wts.sum()
+    if not np.isfinite(n_electrons) or not 0 <= n_electrons <= capacity:
+        raise ValueError(f"Electron count must lie in [0, {capacity:g}] for these bands.")
+
+    width = max(1.0, 10 * getattr(smearing, 'sigma', 0.0),
+                10 * getattr(smearing, 'kbt', 0.0))
+    lo, hi = eigs.min() - width, eigs.max() + width
+    if n_electrons == 0 or n_electrons == capacity:
+        filled = n_electrons == capacity
+        # Return occupations consistent with the reported finite mu. At
+        # finite T, exact empty/full filling is an asymptote; use charge tol.
+        for _ in range(max_iter):
+            mu = eigs.max()+width if filled else eigs.min()-width
+            occupations = spin_factor * smearing.occupation_array(eigs, mu)
+            if abs(np.dot(wts, occupations)-n_electrons) < tol:
+                return mu, occupations.reshape(eigenvalues.shape)
+            width *= 2
+        raise RuntimeError("Fermi-level search did not converge at band-capacity endpoint.")
+
+    if isinstance(smearing, FixedOccupation):
+        # Share partial filling across a degenerate manifold rather than
+        # arbitrarily favoring a band/k-point. Weights determine its capacity.
+        occupations = np.zeros_like(eigs)
+        order = np.argsort(eigs)
+        remaining = float(n_electrons)
+        start = 0
+        while start < len(order):
+            stop = start + 1
+            while stop < len(order) and abs(eigs[order[stop]]-eigs[order[start]]) <= 1e-12:
+                stop += 1
+            group = order[start:stop]
+            group_capacity = spin_factor * wts[group].sum()
+            if group_capacity > 0:
+                fill = min(remaining, group_capacity)
+                occupations[group] = spin_factor * fill / group_capacity
+                remaining -= fill
+                if remaining <= tol:
+                    mu = eigs[order[start]]
+                    return mu, occupations.reshape(eigenvalues.shape)
+            start = stop
+        raise RuntimeError("Fixed occupation filling failed to conserve charge.")
+
+    def residual(mu):
+        return spin_factor * np.dot(wts, smearing.occupation_array(eigs, mu)) - n_electrons
+
+    # A verified sign bracket works even for nonmonotone MP occupations,
+    # although MP may have more than one root. Do not assume a unique mu.
+    for _ in range(100):
+        if residual(lo) <= 0 <= residual(hi):
             break
-        
-        if n_e < n_electrons:
-            e_min = mu
+        width *= 2
+        lo, hi = eigs.min()-width, eigs.max()+width
+    else:
+        raise RuntimeError("Could not bracket the Fermi level.")
+    for _ in range(max_iter):
+        mu = (lo + hi) / 2
+        error = residual(mu)
+        if abs(error) < tol:
+            occupations = spin_factor * smearing.occupation_array(eigs, mu)
+            return mu, occupations.reshape(eigenvalues.shape)
+        if error < 0:
+            lo = mu
         else:
-            e_max = mu
-    
-    fermi_level = mu
-    occupations = smearing.occupation_array(eigs, fermi_level)
-    
-    # Reshape occupations if input was 2D
-    if eigenvalues.ndim > 1:
-        occupations = occupations.reshape(eigenvalues.shape)
-    
-    return fermi_level, occupations * spin_factor
+            hi = mu
+    raise RuntimeError(f"Fermi-level search did not converge: charge error {error:.3g}.")
 
 
 def compute_band_energy(eigenvalues, occupations, weights=1.0):
