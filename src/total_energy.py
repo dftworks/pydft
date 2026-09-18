@@ -142,7 +142,7 @@ def compute_kinetic_energy(evecs, occupations, kg, k_weights=1.0):
         # Single k-point
         nbands = evecs.shape[1]
         for iband in range(nbands):
-            if occupations[iband] < 1e-10:
+            if abs(occupations[iband]) < 1e-10:
                 continue
             e_kin += 0.5 * occupations[iband] * np.sum(
                 np.abs(evecs[:, iband])**2 * kg
@@ -158,7 +158,7 @@ def compute_kinetic_energy(evecs, occupations, kg, k_weights=1.0):
         for ik in range(nk):
             for iband in range(nbands):
                 occ = occupations[ik, iband] if occupations.ndim > 1 else occupations[iband]
-                if occ < 1e-10:
+                if abs(occ) < 1e-10:
                     continue
                 e_kin += 0.5 * k_weights[ik] * occ * np.sum(
                     np.abs(evecs[ik, :, iband])**2 * kg[ik]

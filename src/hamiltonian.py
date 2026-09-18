@@ -60,13 +60,14 @@ class Hamiltonian:
         volume: Cell volume
     """
     
-    def __init__(self, gvec, volume):
+    def __init__(self, gvec, volume, fft_shape=None):
         """
         Initialize Hamiltonian.
 
         Args:
             gvec: GVector object
             volume: Cell volume
+            fft_shape: Optional shared density grid; defaults to a padded grid
 
         PEDAGOGICAL NOTE: Kinetic Energy in G-Space
         -------------------------------------------
@@ -83,7 +84,8 @@ class Hamiltonian:
         """
         self.gvec = gvec
         self.volume = volume
-        self.fft_shape = gvec.get_fft_grid_size()
+        self.fft_shape = (gvec.get_fft_grid_size() if fft_shape is None
+                          else tuple(fft_shape))
         self.n_fft = np.prod(self.fft_shape)
 
         # Kinetic energy: diagonal in G-space
@@ -106,6 +108,8 @@ class Hamiltonian:
         Args:
             vloc_r: Local potential V_loc(r) on FFT grid
         """
+        if np.shape(vloc_r) != self.fft_shape:
+            raise ValueError("Local potential must match the Hamiltonian FFT grid.")
         self.vloc_r = vloc_r
     
     def apply(self, psi_g):

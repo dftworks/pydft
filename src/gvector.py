@@ -89,6 +89,8 @@ class GVector:
             ecut: Energy cutoff in Hartree (kinetic energy: 0.5*|G|^2 < ecut)
         """
         self.lattice = lattice
+        if not np.isfinite(ecut) or ecut <= 0:
+            raise ValueError("Energy cutoff must be finite and positive.")
         self.ecut = ecut
         
         # Generate G-vectors
@@ -112,11 +114,10 @@ class GVector:
         # Maximum |G| from energy cutoff: ½|G|² = E_cut → |G| = √(2E_cut)
         gmax = np.sqrt(2.0 * self.ecut)
 
-        # Estimate max Miller indices using triangle inequality:
-        # |G| = |m₁b₁ + m₂b₂ + m₃b₃| ≤ |m₁||b₁| + |m₂||b₂| + |m₃||b₃|
-        # So |m_i| ≤ G_max / |b_i| is a safe upper bound
-        b_norms = np.linalg.norm(b, axis=1)
-        n_max = (gmax / b_norms).astype(int) + 1
+        # Dual-basis identity: m_i = G.a_i/(2*pi). Reciprocal vectors
+        # can cancel in a skew cell, so Gmax/|b_i| is NOT a safe bound.
+        n_max = np.ceil(gmax * np.linalg.norm(self.lattice.vectors, axis=1)
+                        / (2 * np.pi)).astype(int)
 
         # Generate all candidate Miller indices
         miller_list = []
@@ -154,20 +155,21 @@ class GVector:
         # G=0 should now be at index 0 (verify with g0_index)
         self.g0_index = np.where(self.norms < 1e-10)[0][0]
     
-    def get_fft_grid_size(self, factor=2.0):
+    def get_fft_grid_size(self, factor=4.0):
         """
         Determine FFT grid size to avoid aliasing.
 
-        For proper representation of products (like V*psi), the FFT grid
-        must be at least 2x the maximum Miller index in each direction.
+        Orbitals contain indices through +/-m; their density contains
+        differences through +/-2m. Thus density needs at least 4*m+1 points.
 
         Args:
-            factor: Safety factor (default 2.0 for products)
+            factor: Grid multiplier (default 4.0 for density/products).
+                    Use 2.0 only for orbital storage and round trips.
 
         Returns:
             (n1, n2, n3): FFT grid dimensions
 
-        PEDAGOGICAL NOTE: Why Factor of 2?
+        PEDAGOGICAL NOTE: Why Factor of 4?
         -----------------------------------
         When we compute V(r)×ψ(r) in real space and FFT back to G-space,
         the product can have G-vectors up to 2×G_max (convolution theorem).
@@ -176,9 +178,10 @@ class GVector:
         and contaminate low-G components. This is called ALIASING.
 
         To avoid aliasing for products, we need:
-            N_i ≥ 2 × max(|m_i|)
+            N_i >= 4 * max(|m_i|) + 1
 
-        Production codes may use factor=3 or 4 for higher accuracy.
+        Padding prevents aliasing into the retained orbital subspace.
+        A nonlinear XC potential can still require grid convergence tests.
 
         WHY POWERS OF 2?
         ----------------
@@ -186,11 +189,12 @@ class GVector:
         primes like 2, 3, 5). Rounding up to the next power of 2 trades a
         bit of memory for faster computation.
         """
+        if not np.isfinite(factor) or factor < 2:
+            raise ValueError("FFT factor must be finite and at least 2.")
         # Find maximum Miller index in each direction
         max_miller = np.max(np.abs(self.miller), axis=0)
 
-        # FFT size should be at least 2×max + 1, rounded up to next suitable FFT size
-        n_fft = (factor * max_miller + 1).astype(int)
+        n_fft = np.ceil(factor * max_miller + 1).astype(int)
 
         # Round up to next power of 2 or product of small primes for efficiency
         return tuple(self._next_fft_size(n) for n in n_fft)

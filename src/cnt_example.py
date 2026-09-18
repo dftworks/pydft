@@ -205,7 +205,8 @@ class CarbonNanotubeSCF:
         self.npw = self.gvec.npw
 
         # FFT grid
-        self.fft_shape = self.gvec.get_fft_grid_size()
+        self.density_gvec = GVector(self.lattice, 4 * self.gvec.ecut)
+        self.fft_shape = self.density_gvec.get_fft_grid_size(factor=2)
         self.n_fft = np.prod(self.fft_shape)
 
         print(f"\nEnergy cutoff: {ecut:.1f} Ha ({ecut * HA_TO_EV:.1f} eV)")
@@ -233,7 +234,7 @@ class CarbonNanotubeSCF:
         print(f"Ewald ion-ion energy: {self.ewald.energy:.6f} Ha")
 
         # Hamiltonian
-        self.hamiltonian = Hamiltonian(self.gvec, self.volume)
+        self.hamiltonian = Hamiltonian(self.gvec, self.volume, fft_shape=self.fft_shape)
 
         # Mixer - simple linear mixing. The CNT cell (many atoms, vacuum in
         # two directions) is the stiffest system in the examples; a small
@@ -346,16 +347,16 @@ class CarbonNanotubeSCF:
 
     def _r_to_g_density(self, rho_r):
         rho_fft = np.fft.fftn(rho_r) / self.n_fft
-        return self.gvec.map_from_fft_grid(rho_fft)
+        return self.density_gvec.map_from_fft_grid(rho_fft)
 
     def _g_to_r_density(self, rho_g):
-        rho_fft = self.gvec.map_to_fft_grid(rho_g, self.fft_shape)
+        rho_fft = self.density_gvec.map_to_fft_grid(rho_g, self.fft_shape)
         rho_r = np.fft.ifftn(rho_fft) * self.n_fft
         return np.real(rho_r)
 
     def _build_potential(self):
-        v_hartree_g = compute_hartree_potential(self.rho_g, self.gvec.norms)
-        v_hartree_fft = self.gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
+        v_hartree_g = compute_hartree_potential(self.rho_g, self.density_gvec.norms)
+        v_hartree_fft = self.density_gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
         v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
 
         rho_real = np.maximum(np.real(self.rho_r), 1e-20)
@@ -383,7 +384,7 @@ class CarbonNanotubeSCF:
     def _compute_total_energy(self):
         e_band = np.sum(self.occupations * self.evals)
         e_hartree = compute_hartree_energy(
-            self.rho_g, self.gvec.norms, self.volume)
+            self.rho_g, self.density_gvec.norms, self.volume)
 
         rho_real = np.maximum(np.real(self.rho_r), 1e-20)
         e_xc = compute_xc_energy(rho_real, self._exc_r,

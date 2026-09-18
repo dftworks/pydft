@@ -95,13 +95,13 @@ class PWBasis:
         return f"PWBasis(npw={self.npw}, k={self.k_cart})"
 
 
-def create_fft_workspace(gvec, factor=2.0):
+def create_fft_workspace(gvec, factor=4.0):
     """
     Create FFT workspace arrays.
     
     Args:
         gvec: GVector object
-        factor: FFT grid size factor (2.0 for products)
+        factor: FFT grid size factor (4.0 for density/products)
     
     Returns:
         fft_shape: (n1, n2, n3) grid dimensions

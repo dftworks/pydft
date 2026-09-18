@@ -48,6 +48,7 @@ WHY G-SPACE (RECIPROCAL SPACE)?
 """
 
 import numpy as np
+import warnings
 from .constants import HA_TO_EV
 from .lattice import Lattice
 from .gvector import GVector
@@ -100,16 +101,20 @@ class SCFSolver:
         # Generate G-vectors
         self.gvec = GVector(lattice, ecut)
         self.npw = self.gvec.npw
+        if (not isinstance(n_bands, (int, np.integer)) or not 1 <= n_bands <= self.npw
+                or not np.isfinite(n_electrons) or not 0 <= n_electrons <= 2*n_bands):
+            raise ValueError("Require 1 <= n_bands <= npw and 0 <= n_electrons <= 2*n_bands.")
         
         # FFT grid
-        self.fft_shape = self.gvec.get_fft_grid_size()
+        self.density_gvec = GVector(self.lattice, 4 * self.gvec.ecut)
+        self.fft_shape = self.density_gvec.get_fft_grid_size(factor=2)
         self.n_fft = np.prod(self.fft_shape)
         
         # Plane wave basis (Gamma point only)
         self.pwbasis = PWBasis(self.gvec)
         
         # Hamiltonian
-        self.hamiltonian = Hamiltonian(self.gvec, self.volume)
+        self.hamiltonian = Hamiltonian(self.gvec, self.volume, fft_shape=self.fft_shape)
         
         # External local potential term used by this pedagogical SCF driver.
         if external_potential is not None:
@@ -194,19 +199,9 @@ class SCFSolver:
         For metals, we would use Fermi-Dirac smearing instead of this
         simple step-function filling. See smearing.py for details.
         """
-        occ = np.zeros(self.n_bands)
-        n_filled = self.n_electrons // 2  # Assuming spin-paired
-        remainder = self.n_electrons % 2
+        return np.clip(self.n_electrons - 2 * np.arange(self.n_bands), 0.0, 2.0)
 
-        for i in range(min(n_filled, self.n_bands)):
-            occ[i] = 2.0  # Spin-paired
-
-        if remainder > 0 and n_filled < self.n_bands:
-            occ[n_filled] = float(remainder)
-
-        return occ
-    
-    def run(self, max_iter=50, tol=1e-6, verbose=True):
+    def run(self, max_iter=50, tol=1e-6, verbose=True, density_tol=1e-7):
         """
         Run SCF calculation.
         
@@ -214,10 +209,20 @@ class SCFSolver:
             max_iter: Maximum SCF iterations
             tol: Energy convergence tolerance (Hartree)
             verbose: Print progress
+            density_tol: RMS density residual tolerance (electrons/Bohr^3)
         
         Returns:
             Total energy (Hartree)
         """
+        if (not isinstance(max_iter, (int, np.integer)) or max_iter < 1
+                or not np.isfinite(tol) or tol <= 0
+                or not np.isfinite(density_tol) or density_tol <= 0):
+            raise ValueError("Use positive tolerances and integer max_iter >= 1.")
+        if hasattr(self.mixer, 'reset'):
+            self.mixer.reset()
+        self.converged = False
+        self.iterations = 0
+        self.density_residual = np.inf
         if verbose:
             print("=" * 60)
             print("SCF Calculation")
@@ -262,7 +267,13 @@ class SCFSolver:
             # Phase 3: build rho_new from occupied orbitals.
             rho_g_new = self._compute_density()
             
-            # Evaluate the Harris-Foulkes-like total energy expression.
+            rho_old = self.rho_g.copy()
+            rho_r_new = self._g_to_r_density(rho_g_new)
+            self.density_residual = np.sqrt(np.mean((rho_r_new - self.rho_r)**2))
+            self.rho_g, self.rho_r = rho_g_new, rho_r_new
+            self.iterations = scf_iter
+            self._build_potential()
+            # Direct output-orbital energy, consistent before convergence.
             energy = self._compute_total_energy()
             
             # Check convergence
@@ -271,15 +282,19 @@ class SCFSolver:
             if verbose:
                 print(f"{scf_iter:4d} {energy:16.8f} {de:12.2e} {de * HA_TO_EV:12.2e}")
             
-            if de < tol:
+            if de < tol and self.density_residual < density_tol and scf_iter > 1:
+                self.converged = True
                 converged = True
                 if verbose:
                     print("-" * 60)
                     print(f"SCF converged in {scf_iter} iterations")
                 break
             
+            if scf_iter == max_iter:
+                break
+
             # Phase 4: mix old/new densities to damp fixed-point oscillations.
-            rho_mixed = self.mixer.mix(self.rho_g, rho_g_new)
+            rho_mixed = self.mixer.mix(rho_old, rho_g_new)
             self.rho_g = rho_mixed
             
             # Keep real-space and reciprocal-space densities in sync.
@@ -291,6 +306,10 @@ class SCFSolver:
             print("-" * 60)
             print(f"SCF did not converge in {max_iter} iterations")
         
+        if not self.converged:
+            warnings.warn(f"SCF did not converge after {self.iterations} iterations; "
+                          f"density residual={self.density_residual:.3g} e/Bohr^3",
+                          RuntimeWarning, stacklevel=2)
         # Print final results
         if verbose:
             print("-" * 60)
@@ -353,7 +372,7 @@ class SCFSolver:
         rho_fft = np.fft.fftn(rho_r) / self.n_fft
 
         # Map from full FFT grid to our G-vector list (subset within cutoff)
-        rho_g = self.gvec.map_from_fft_grid(rho_fft)
+        rho_g = self.density_gvec.map_from_fft_grid(rho_fft)
 
         return rho_g
 
@@ -373,7 +392,7 @@ class SCFSolver:
             ρ(r) → ρ(G) → ρ(r)  is identity (up to FFT precision)
         """
         # Map from G-vector list to full FFT grid
-        rho_fft = self.gvec.map_to_fft_grid(rho_g, self.fft_shape)
+        rho_fft = self.density_gvec.map_to_fft_grid(rho_g, self.fft_shape)
 
         # Inverse of the scaling used in _r_to_g_density.
         rho_r = np.fft.ifftn(rho_fft) * self.n_fft
@@ -411,7 +430,7 @@ class SCFSolver:
         # ===== STEP 1: Hartree potential (G-space calculation) =====
         # V_H(G) = 4πρ(G)/|G|² is trivial in reciprocal space!
         # Compare to solving ∇²V_H = -4πρ in real space (much harder)
-        v_hartree_g = compute_hartree_potential(self.rho_g, self.gvec.norms)
+        v_hartree_g = compute_hartree_potential(self.rho_g, self.density_gvec.norms)
 
         # ===== STEP 2: XC potential (real-space calculation) =====
         # LDA: V_xc depends only on ρ(r) at each point
@@ -421,7 +440,7 @@ class SCFSolver:
 
         # ===== STEP 3: Transform Hartree to real space =====
         # We need V_H(r) to apply the potential via FFT convolution
-        v_hartree_fft = self.gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
+        v_hartree_fft = self.density_gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
         v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
 
         # ===== STEP 4: Sum all contributions =====
@@ -462,71 +481,20 @@ class SCFSolver:
         return rho_g
     
     def _compute_total_energy(self):
+        """Direct orbital internal energy: T + E_ext + E_H + E_xc.
+
+        The input potential's eigenvalues must not be combined with output
+        density double-counting terms. See pydft-book/totalenergy.tex.
         """
-        Compute total energy.
-
-        E_tot = E_band - E_H + E_xc - E_Vxc
-
-        This base-class implementation covers the pedagogical jellium /
-        harmonic-well case.  The UPF-enabled SCF solver (see silicon_upf.py)
-        adds ion-ion Ewald and pseudopotential energy terms.
-
-        PEDAGOGICAL NOTE: Double-Counting Correction
-        ---------------------------------------------
-        This is one of the trickiest parts of DFT to understand!
-
-        The band energy is:
-            E_band = Σ_i f_i ε_i = Σ_i f_i ⟨ψ_i|H|ψ_i⟩
-                   = Σ_i f_i ⟨ψ_i| T + V_H + V_xc + V_ext |ψ_i⟩
-
-        But this OVER-COUNTS the Hartree and XC energies!
-
-        WHY? Consider Hartree:
-        - E_H = (1/2) ∫∫ ρ(r)ρ(r')/|r-r'| dr dr' = (1/2) ∫ V_H(r)ρ(r) dr
-        - But E_band contains ∫ V_H(r)ρ(r) dr (the full integral, not half!)
-
-        So we must subtract the extra Hartree:
-            E_tot = E_band - E_H  (removes the double-counted half)
-
-        Similar for XC:
-        - E_band contains ∫ V_xc(r)ρ(r) dr = E_Vxc
-        - But true XC energy is E_xc = ∫ ε_xc(r)ρ(r) dr ≠ E_Vxc
-        - (They differ because V_xc = d(ρε_xc)/dρ ≠ ε_xc)
-
-        Final formula:
-            E_tot = E_band - E_H + E_xc - E_Vxc + E_ion-ion
-
-        This correctly counts each interaction exactly once!
-        """
-        # ===== Band energy: sum of occupied eigenvalues =====
-        # E_band = Σ_i f_i ε_i (includes T + V_H + V_xc + V_ext)
-        e_band = np.sum(self.occupations * self.evals)
-
-        # ===== Hartree energy (for double-counting correction) =====
-        # E_H = (Ω/2) Σ_{G≠0} 4π|ρ(G)|²/|G|²
-        e_hartree = compute_hartree_energy(self.rho_g, self.gvec.norms, self.volume)
-
-        # ===== XC energy =====
-        # E_xc = ∫ ρ(r) ε_xc(ρ(r)) dr
-        rho_real = np.maximum(np.real(self.rho_r), 1e-20)
-        e_xc = compute_xc_energy(rho_real, self._exc_r, self.volume, self.n_fft)
-
-        # ===== XC potential energy (for double-counting correction) =====
-        # E_Vxc = ∫ ρ(r) V_xc(r) dr  (this is what E_band contains)
-        e_vxc = compute_xc_potential_energy(rho_real, self._v_xc_r,
-                                            self.volume, self.n_fft)
-
-        # Diagnostic only: e_ext is already included implicitly in e_band.
-        # We keep this explicit term for teaching and consistency checks.
-        e_ext = (self.volume / self.n_fft) * np.sum(rho_real * self.v_ext)
-
-        # ===== Total energy with double-counting corrections =====
-        # E_tot = E_band - E_H + E_xc - E_Vxc
-        # The -E_H removes the extra half of Hartree in E_band
-        # The +E_xc - E_Vxc replaces ∫ρV_xc with ∫ρε_xc
-        e_total = e_band - e_hartree + e_xc - e_vxc
-
-        return e_total
+        e_kinetic = np.sum(self.occupations * np.sum(
+            np.abs(self.evecs)**2 * self.pwbasis.kg[:, None], axis=0))
+        e_external = np.sum(self.rho_r * self.v_ext) * self.volume / self.n_fft
+        e_hartree = compute_hartree_energy(self.rho_g, self.density_gvec.norms,
+                                          self.volume)
+        rho_real = np.maximum(self.rho_r.real, 1e-20)
+        _, exc = lda_xc(rho_real)
+        e_xc = compute_xc_energy(rho_real, exc, self.volume, self.n_fft)
+        return e_kinetic + e_external + e_hartree + e_xc
     
     def get_eigenvalues(self):
         """Return eigenvalues in Hartree."""

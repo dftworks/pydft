@@ -225,7 +225,8 @@ class SiliconBandStructure:
         # G-vectors
         self.gvec = GVector(self.lattice, ecut)
         self.npw = self.gvec.npw
-        self.fft_shape = self.gvec.get_fft_grid_size()
+        self.density_gvec = GVector(self.lattice, 4 * self.gvec.ecut)
+        self.fft_shape = self.density_gvec.get_fft_grid_size(factor=2)
         self.n_fft = np.prod(self.fft_shape)
         
         print(f"Energy cutoff: {ecut:.1f} Ha ({ecut * HA_TO_EV:.1f} eV)")
@@ -236,7 +237,7 @@ class SiliconBandStructure:
         self.v_ext = create_silicon_potential(self.lattice, self.fft_shape)
         
         # Hamiltonian
-        self.hamiltonian = Hamiltonian(self.gvec, self.volume)
+        self.hamiltonian = Hamiltonian(self.gvec, self.volume, fft_shape=self.fft_shape)
         
         # Storage
         self.rho_r = None
@@ -275,8 +276,8 @@ class SiliconBandStructure:
         
         for scf_iter in range(1, max_iter + 1):
             # Build potential
-            v_hartree_g = compute_hartree_potential(self.rho_g, self.gvec.norms)
-            v_hartree_fft = self.gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
+            v_hartree_g = compute_hartree_potential(self.rho_g, self.density_gvec.norms)
+            v_hartree_fft = self.density_gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
             v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
             
             rho_real = np.maximum(np.real(self.rho_r), 1e-20)
@@ -471,10 +472,10 @@ class SiliconBandStructure:
     
     def _r_to_g(self, arr_r):
         arr_fft = np.fft.fftn(arr_r) / self.n_fft
-        return self.gvec.map_from_fft_grid(arr_fft)
+        return self.density_gvec.map_from_fft_grid(arr_fft)
     
     def _g_to_r(self, arr_g):
-        arr_fft = self.gvec.map_to_fft_grid(arr_g, self.fft_shape)
+        arr_fft = self.density_gvec.map_to_fft_grid(arr_g, self.fft_shape)
         return np.real(np.fft.ifftn(arr_fft) * self.n_fft)
 
 

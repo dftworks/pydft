@@ -170,7 +170,8 @@ class GrapheneSCF:
         self.npw = self.gvec.npw
 
         # FFT grid
-        self.fft_shape = self.gvec.get_fft_grid_size()
+        self.density_gvec = GVector(self.lattice, 4 * self.gvec.ecut)
+        self.fft_shape = self.density_gvec.get_fft_grid_size(factor=2)
         self.n_fft = np.prod(self.fft_shape)
 
         print(f"\nEnergy cutoff: {ecut:.1f} Ha ({ecut * HA_TO_EV:.1f} eV)")
@@ -195,7 +196,7 @@ class GrapheneSCF:
         print(f"Ewald ion-ion energy: {self.ewald.energy:.6f} Ha")
 
         # Hamiltonian
-        self.hamiltonian = Hamiltonian(self.gvec, self.volume)
+        self.hamiltonian = Hamiltonian(self.gvec, self.volume, fft_shape=self.fft_shape)
 
         # Eigensolver
         self.eigensolver = PCGEigensolver(self.npw, self.n_bands)
@@ -320,21 +321,21 @@ class GrapheneSCF:
     def _r_to_g_density(self, rho_r):
         """Transform density from real space to G-space."""
         rho_fft = np.fft.fftn(rho_r) / self.n_fft
-        return self.gvec.map_from_fft_grid(rho_fft)
+        return self.density_gvec.map_from_fft_grid(rho_fft)
 
     def _g_to_r_density(self, rho_g):
         """Transform density from G-space to real space."""
-        rho_fft = self.gvec.map_to_fft_grid(rho_g, self.fft_shape)
+        rho_fft = self.density_gvec.map_to_fft_grid(rho_g, self.fft_shape)
         rho_r = np.fft.ifftn(rho_fft) * self.n_fft
         return np.real(rho_r)
 
     def _build_potential(self):
         """Build effective potential."""
         # Hartree potential
-        v_hartree_g = compute_hartree_potential(self.rho_g, self.gvec.norms)
+        v_hartree_g = compute_hartree_potential(self.rho_g, self.density_gvec.norms)
 
         # Transform to real space
-        v_hartree_fft = self.gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
+        v_hartree_fft = self.density_gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
         v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
 
         # XC potential
@@ -372,7 +373,7 @@ class GrapheneSCF:
 
         # Hartree energy
         e_hartree = compute_hartree_energy(
-            self.rho_g, self.gvec.norms, self.volume)
+            self.rho_g, self.density_gvec.norms, self.volume)
 
         # XC energy
         rho_real = np.maximum(np.real(self.rho_r), 1e-20)

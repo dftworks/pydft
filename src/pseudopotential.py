@@ -169,7 +169,7 @@ def compute_local_potential_g(atom_species, atom_positions, gvector, volume):
     
     V_loc^tot(G) = sum_atoms V_loc(G) * S(G)
     
-    where S(G) = exp(i*G*r_atom) is the structure factor.
+    where S(G) = exp(-i*G*r_atom) is the structure factor.
     
     Args:
         atom_species: List of AtomicSpecies for each atom
@@ -208,7 +208,7 @@ def compute_local_potential_g(atom_species, atom_positions, gvector, volume):
             
             # Structure factor phase
             phase = TWOPI * (m[0]*pos[0] + m[1]*pos[1] + m[2]*pos[2])
-            sfact = np.exp(1j * phase)
+            sfact = np.exp(-1j * phase)
             
             vloc_g[ig] += vloc_species[shell_idx] * sfact
     

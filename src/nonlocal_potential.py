@@ -41,7 +41,7 @@ class NonlocalPotential:
     
         2. ``get_full_projectors(k)`` — Multiplies the radial part by the
            real spherical harmonic Y_lm(k+G_hat) and the per-atom structure
-           factor exp(i G . tau_atom).  The result is the complete
+           factor exp(-i G . tau_atom).  The result is the complete
            projector beta_lm(k+G) ready for inner products with psi(G).
     
     This class computes:
@@ -105,9 +105,9 @@ class NonlocalPotential:
                 g_norm = round(self.gvec.norms[ig], 8)
                 shell_idx = shell_map.get(g_norm, 0)
                 
-                # Phase factor: exp(i G . tau)
+                # Forward Fourier coefficient of V(r-tau): exp(-i G . tau).
                 phase = TWOPI * (m[0]*atom_pos[0] + m[1]*atom_pos[1] + m[2]*atom_pos[2])
-                sfact = np.exp(1j * phase)
+                sfact = np.exp(-1j * phase)
                 
                 vloc_g[ig] += vloc_shells[shell_idx] * sfact
         
@@ -137,13 +137,13 @@ class NonlocalPotential:
             atom_pos: Fractional position of atom (3,)
             
         Returns:
-            Complex array of phases exp(i G . tau)
+            Complex array of phases exp(-i G . tau)
         """
         phases = np.zeros(self.npw, dtype=complex)
         for ig in range(self.npw):
             m = self.gvec.miller[ig]
             phase = TWOPI * (m[0]*atom_pos[0] + m[1]*atom_pos[1] + m[2]*atom_pos[2])
-            phases[ig] = np.exp(1j * phase)
+            phases[ig] = np.exp(-1j * phase)
         return phases
     
     def get_full_projectors(self, k_cart):
@@ -162,6 +162,8 @@ class NonlocalPotential:
         
         for atom_pos in self.atom_positions:
             phases = self.compute_structure_factor_phases(atom_pos)
+            tau_cart = atom_pos @ self.gvec.lattice.vectors
+            phases *= np.exp(-1j * np.dot(k_cart, tau_cart))
             
             for ibeta in range(self.psp.nbeta):
                 l = self.psp.lbeta[ibeta]
@@ -174,7 +176,7 @@ class NonlocalPotential:
                     
                     # beta_lm(G) = beta_l(|k+G|) * Y_lm(k+G)
                     # Include structure factor phase
-                    proj_g = beta_r * ylm * phases
+                    proj_g = (-1j)**l * beta_r * ylm * phases
                     
                     full_projectors.append((proj_g, d_ii))
                     
@@ -234,8 +236,7 @@ class NonlocalPotential:
         Returns:
             V_nl |psi> in G-space
         """
-        beta_kg, kg_cart = self.get_beta_kg(k_cart)
-        return self.apply_vnl(psi_g, beta_kg, kg_cart)
+        return self.apply_vnl(psi_g, k_cart=k_cart)
     
     @property
     def zion(self):
