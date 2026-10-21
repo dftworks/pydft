@@ -158,6 +158,12 @@ def generate_kpath(lattice, path_labels, npts_per_segment=20):
             tick_positions, tick_labels)
 
 
+def compute_kpoint_kinetic_energies(k_cart, gvec):
+    """Return the plane-wave kinetic energies ``|k + G|² / 2`` in Hartree."""
+    k_cart = np.asarray(k_cart, dtype=float)
+    return 0.5 * np.sum((gvec.cart + k_cart)**2, axis=1)
+
+
 def compute_eigenvalues_at_k(k_cart, gvec, hamiltonian, n_bands, kg_base):
     """
     Compute eigenvalues at a specific k-point.
@@ -174,11 +180,8 @@ def compute_eigenvalues_at_k(k_cart, gvec, hamiltonian, n_bands, kg_base):
     """
     npw = gvec.npw
     
-    # Compute |k+G|^2 for this k-point
-    kg = np.zeros(npw)
-    for i in range(npw):
-        kpg = k_cart + gvec.cart[i]
-        kg[i] = np.sum(kpg**2)
+    # Compute the kinetic energy ½|k+G|² for this k-point.
+    kg = compute_kpoint_kinetic_energies(k_cart, gvec)
     
     # Create temporary Hamiltonian with updated kinetic energy
     # We need to update the diagonal (kinetic part)
@@ -372,10 +375,7 @@ class SiliconBandStructure:
             k = k_cart[ik]
             
             # Update kinetic energy for this k-point
-            kg = np.zeros(self.npw)
-            for ig in range(self.npw):
-                kpg = k + self.gvec.cart[ig]
-                kg[ig] = np.sum(kpg**2)
+            kg = compute_kpoint_kinetic_energies(k, self.gvec)
             
             self.hamiltonian.kg = kg
             
