@@ -126,6 +126,52 @@ class SimplePseudopotential:
         return loc_pot.compute_vloc_g(gshells)
 
 
+def create_periodic_gaussian_model_potential(
+    lattice, atom_positions, fft_shape, depth=1.0, r_c=1.0
+):
+    """Build a smooth periodic sum of short-range Gaussian model wells.
+
+    Each atom contributes ``-depth * exp(-|r-R|^2/r_c^2)`` over all lattice
+    translations. Its Fourier coefficient is
+
+        -depth * pi^(3/2) * r_c^3 / Omega
+        * exp(-|G|^2*r_c^2/4) * sum_a exp(-i G.R_a).
+
+    Args:
+        lattice: Cell lattice in Bohr
+        atom_positions: Fractional atomic positions, shape (natoms, 3)
+        fft_shape: Three-dimensional FFT grid shape
+        depth: Positive well depth in Hartree
+        r_c: Gaussian radius in Bohr
+
+    Returns:
+        Real-space periodic potential sampled on ``fft_shape``.
+    """
+    if not np.isfinite(depth) or depth < 0:
+        raise ValueError("depth must be finite and nonnegative.")
+    if not np.isfinite(r_c) or r_c <= 0:
+        raise ValueError("r_c must be finite and positive.")
+    fft_shape = tuple(fft_shape)
+    if (len(fft_shape) != 3 or any(
+            not isinstance(n, (int, np.integer)) or n < 1 for n in fft_shape)):
+        raise ValueError("fft_shape must contain three positive integer dimensions.")
+    atom_positions = np.asarray(atom_positions, dtype=float)
+    if atom_positions.ndim != 2 or atom_positions.shape[1] != 3:
+        raise ValueError("atom_positions must have shape (natoms, 3).")
+
+    miller_axes = [np.fft.fftfreq(n) * n for n in fft_shape]
+    miller = np.stack(np.meshgrid(*miller_axes, indexing="ij"), axis=-1)
+    g_cart = miller @ lattice.reciprocal_vectors
+    g2 = np.sum(g_cart**2, axis=-1)
+
+    phases = TWOPI * np.einsum("...i,ai->...a", miller, atom_positions)
+    structure_factor = np.sum(np.exp(-1j * phases), axis=-1)
+    v_g = (-depth * np.pi**1.5 * r_c**3 / lattice.volume
+           * np.exp(-g2 * r_c**2 / 4.0) * structure_factor)
+
+    return np.fft.ifftn(v_g * np.prod(fft_shape)).real
+
+
 class AtomicSpecies:
     """
     Represents an atomic species with its pseudopotential.

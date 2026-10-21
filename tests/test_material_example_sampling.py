@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from src.cnt_example import CarbonNanotubeSCF
@@ -20,7 +21,17 @@ def test_material_examples_report_gamma_only_and_do_not_accept_ignored_mesh(
     output = capsys.readouterr().out
 
     assert "Sampling: Gamma-only (1 k-point)" in output
+    assert "Ewald" not in output
+    assert not hasattr(solver, "ewald")
     assert not hasattr(solver, "kpts")
     assert not hasattr(solver, "nk")
+
+    solver.evals = np.zeros(solver.n_bands)
+    solver.occupations = np.zeros(solver.n_bands)
+    solver._print_results(0.0)
+    result_output = capsys.readouterr().out
+    assert "Electronic energy in model potential:" in result_output
+    assert "Ewald energy" not in result_output
+
     with pytest.raises(TypeError, match="kpts_mesh"):
         solver_type(ecut=0.5, kpts_mesh=(2, 2, 2), **kwargs)
