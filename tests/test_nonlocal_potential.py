@@ -1,11 +1,12 @@
 """Translated projectors and Fourier phases; see book UPF chapter."""
 from pathlib import Path
+from types import SimpleNamespace
 import numpy as np
 import pytest
 from src.lattice import Lattice
 from src.gvector import GVector
 from src.upf_reader import UPFPseudopotential
-from src.nonlocal_potential import NonlocalPotential
+from src.nonlocal_potential import NonlocalPotential, PseudopotentialSet
 
 
 @pytest.fixture
@@ -49,6 +50,22 @@ def test_local_potential_covers_density_sphere_and_matches_full_reference(psp):
         density_gvec.map_to_fft_grid(reference.vloc_g, fft_shape)
     )
     np.testing.assert_allclose(actual_r, reference_r)
+
+
+def test_pseudopotential_set_extracts_requested_local_g_sphere(psp):
+    lattice = Lattice.cubic(8)
+    orbital_gvec = GVector(lattice, 2)
+    density_gvec = GVector(lattice, 4 * orbital_gvec.ecut)
+    crystal = SimpleNamespace(atoms=[SimpleNamespace(
+        symbol="Si", position=np.array([.25, 0, 0])
+    )])
+    potentials = PseudopotentialSet()
+    potentials.pseudopotentials["Si"] = psp
+    potentials.setup_for_crystal(crystal, orbital_gvec, lattice.volume)
+
+    local = next(iter(potentials.nonlocal_pots.values())).get_vloc_g()
+    np.testing.assert_allclose(potentials.get_total_vloc_g(density_gvec), local)
+    assert potentials.get_total_vloc_g(orbital_gvec).shape == (orbital_gvec.npw,)
 
 
 def test_nonlocal_wrapper_translation_and_hermiticity(psp):

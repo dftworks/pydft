@@ -323,7 +323,17 @@ class PseudopotentialSet:
         """
         vloc_total = np.zeros(gvec.npw, dtype=complex)
         for nlpot in self.nonlocal_pots.values():
-            vloc_total += nlpot.get_vloc_g()
+            local_index = {
+                tuple(miller): i
+                for i, miller in enumerate(nlpot.local_gvec.miller)
+            }
+            try:
+                source_indices = [local_index[tuple(miller)] for miller in gvec.miller]
+            except KeyError as error:
+                raise ValueError(
+                    "Requested G-vector is outside the local-potential sphere."
+                ) from error
+            vloc_total += nlpot.get_vloc_g()[source_indices]
         return vloc_total
     
     def get_all_full_projectors(self, k_cart):
