@@ -8,7 +8,7 @@ carbon nanotube -- a 1D periodic material made by rolling up a graphene sheet.
 The key computational idea:
 - The nanotube axis is along z (periodic direction)
 - Large vacuum in x and y prevents interaction between periodic images
-- K-point mesh: 1 x 1 x n3 (dense only along the tube axis)
+- Gamma-only SCF; the Brillouin zone is not sampled along the tube axis
 
 A (4,0) zigzag CNT is chosen as a small but representative tube
 (16 atoms per unit cell, diameter ~ 3.1 Angstrom).
@@ -158,12 +158,11 @@ class CarbonNanotubeSCF:
 
     This example highlights:
     - 1D periodic geometry (tube axis along z, vacuum in x and y)
-    - K-point mesh dense only along the tube axis (1 x 1 x n3)
+    - Gamma-only SCF for a 1D-periodic system
     - More atoms per cell than silicon or graphene (4*n for a (n,0) tube)
     """
 
-    def __init__(self, n=4, ecut=3.0, n_extra_bands=4,
-                 kpts_mesh=(1, 1, 4)):
+    def __init__(self, n=4, ecut=3.0, n_extra_bands=4):
         """
         Initialize CNT SCF calculation.
 
@@ -171,7 +170,6 @@ class CarbonNanotubeSCF:
             n: Chiral index for a (n,0) zigzag tube
             ecut: Energy cutoff in Hartree
             n_extra_bands: Extra empty bands beyond the occupied ones
-            kpts_mesh: K-point mesh (1, 1, n3)
         """
         print("=" * 60)
         print(f"Carbon Nanotube ({n},0) DFT Calculation (Educational)")
@@ -216,11 +214,7 @@ class CarbonNanotubeSCF:
               f"{n_extra_bands} empty)")
         print(f"Electrons: {self.n_electrons}")
 
-        # K-points (dense along tube axis only)
-        from src.kpoints import monkhorst_pack
-        self.kpts = monkhorst_pack(self.lattice, *kpts_mesh)
-        self.nk = self.kpts.nk
-        print(f"K-points: {kpts_mesh} mesh = {self.nk} points")
+        print("Sampling: Gamma-only (1 k-point)")
 
         # External potential (model pseudopotential)
         print("\nBuilding model pseudopotential...")
@@ -456,8 +450,7 @@ def main():
     cnt_scf = CarbonNanotubeSCF(
         n=4,
         ecut=3.0,              # Low cutoff for speed
-        n_extra_bands=4,       # 4 empty bands above occupied ones
-        kpts_mesh=(1, 1, 4)    # Dense only along tube axis
+        n_extra_bands=4        # 4 empty bands above occupied ones
     )
 
     energy = cnt_scf.run(max_iter=120, tol=1e-4)

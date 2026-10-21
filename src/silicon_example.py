@@ -23,8 +23,6 @@ from src.constants import HA_TO_EV, BOHR_TO_ANG, ANG_TO_BOHR
 from src.lattice import Lattice
 from src.crystal import Crystal
 from src.gvector import GVector
-from src.pwbasis import PWBasis
-from src.kpoints import monkhorst_pack, gamma_only
 from src.xc import lda_xc, compute_xc_energy, compute_xc_potential_energy
 from src.hartree import compute_hartree_potential, compute_hartree_energy
 from src.ewald import Ewald
@@ -123,14 +121,13 @@ class SiliconSCF:
     SCF solver for bulk silicon.
     """
     
-    def __init__(self, ecut=5.0, n_bands=8, kpts_mesh=(2, 2, 2)):
+    def __init__(self, ecut=5.0, n_bands=8):
         """
         Initialize silicon SCF calculation.
         
         Args:
             ecut: Energy cutoff in Hartree
             n_bands: Number of bands to compute
-            kpts_mesh: K-point mesh (n1, n2, n3)
         """
         print("=" * 60)
         print("Silicon DFT Calculation (Educational)")
@@ -168,10 +165,7 @@ class SiliconSCF:
         print(f"Bands: {n_bands}")
         print(f"Electrons: {self.n_electrons}")
         
-        # K-points
-        self.kpts = monkhorst_pack(self.lattice, *kpts_mesh)
-        self.nk = self.kpts.nk
-        print(f"K-points: {kpts_mesh} mesh = {self.nk} points")
+        print("Sampling: Gamma-only (1 k-point)")
         
         # External potential (model pseudopotential)
         print("\nBuilding model pseudopotential...")
@@ -415,8 +409,7 @@ def main():
     # Create and run silicon SCF
     si_scf = SiliconSCF(
         ecut=5.0,        # Higher cutoff for accuracy
-        n_bands=8,       # 4 valence + 4 conduction
-        kpts_mesh=(2, 2, 2)  # Match Rust example
+        n_bands=8        # 4 valence + 4 conduction
     )
     
     # Use looser tolerance for educational demonstration
