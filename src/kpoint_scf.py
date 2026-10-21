@@ -19,6 +19,7 @@ from .hamiltonian import Hamiltonian, g_to_r
 from .eigensolver import PCGEigensolver, random_initial_guess
 from .mixing import LinearMixer
 from .smearing import create_smearing, find_fermi_level
+from .kpoints import _monkhorst_pack_fractional
 
 
 def generate_monkhorst_pack(nk1, nk2, nk3, shift=(0.0, 0.0, 0.0)):
@@ -34,27 +35,7 @@ def generate_monkhorst_pack(nk1, nk2, nk3, shift=(0.0, 0.0, 0.0)):
         kpoints_frac: Array of fractional k-points (nk, 3)
         weights: Array of k-point weights (nk,)
     """
-    shift = np.asarray(shift, dtype=float)
-    kpoints = []
-    for i in range(nk1):
-        for j in range(nk2):
-            for k in range(nk3):
-                # Match Rust/spglib mesh semantics:
-                # shift=0.0 -> Gamma-centered mesh (e.g., 2x2x2 gives 0.0/0.5)
-                # shift=1.0 -> half-grid shifted mesh (0.25/0.75 for 2x2x2)
-                kx = (i + 0.5 * shift[0]) / nk1
-                ky = (j + 0.5 * shift[1]) / nk2
-                kz = (k + 0.5 * shift[2]) / nk3
-                kx %= 1.0
-                ky %= 1.0
-                kz %= 1.0
-                kpoints.append([kx, ky, kz])
-    
-    kpoints = np.array(kpoints)
-    nk = len(kpoints)
-    weights = np.ones(nk) / nk
-    
-    return kpoints, weights
+    return _monkhorst_pack_fractional((nk1, nk2, nk3), shift)
 
 
 def reduce_kpoints_by_symmetry(kpoints_frac, weights, tol=1e-8):

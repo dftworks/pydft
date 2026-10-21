@@ -4,6 +4,7 @@ from src.lattice import Lattice
 from src.gvector import GVector
 from src.kpoints import (monkhorst_pack, automatic_kpoints, GammaPoint,
                          get_kpg_norms)
+from src.kpoint_scf import generate_monkhorst_pack
 
 def test_gamma_point():
     """Test Gamma point generator."""
@@ -49,3 +50,21 @@ def test_kpg_norms_match_direct_cartesian_norms():
     expected = np.sum((gvector.cart + k_cart)**2, axis=1)
 
     np.testing.assert_allclose(actual, expected)
+
+
+@pytest.mark.parametrize("mesh", [(2, 2, 2), (3, 2, 1), (3, 3, 3)])
+@pytest.mark.parametrize("shift", [False, True])
+def test_monkhorst_pack_apis_share_shift_semantics(mesh, shift):
+    lattice = Lattice.cubic(10.0)
+    kpoints = monkhorst_pack(lattice, *mesh, shift=shift)
+    scf_points, scf_weights = generate_monkhorst_pack(
+        *mesh, shift=(float(shift),) * 3
+    )
+
+    # Compare modulo reciprocal lattice translations in a canonical cell.
+    def canonical(points):
+        points = np.round((points + 0.5) % 1.0 - 0.5, 12)
+        return points[np.lexsort((points[:, 2], points[:, 1], points[:, 0]))]
+
+    np.testing.assert_allclose(canonical(kpoints.k_frac), canonical(scf_points))
+    np.testing.assert_allclose(kpoints.weights, scf_weights)

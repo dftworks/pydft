@@ -17,6 +17,17 @@ import numpy as np
 from .constants import TWOPI
 
 
+def _monkhorst_pack_fractional(mesh, shift=(0.0, 0.0, 0.0)):
+    """Generate a Gamma-centered mesh, optionally shifted by half a grid step."""
+    mesh = np.asarray(mesh, dtype=int)
+    shift = np.asarray(shift, dtype=float)
+    axes = [np.arange(n, dtype=float) for n in mesh]
+    indices = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
+    k_frac = (indices + 0.5 * shift) / mesh
+    weights = np.full(len(k_frac), 1.0 / len(k_frac))
+    return k_frac, weights
+
+
 class KPoints:
     """
     K-point mesh for Brillouin zone sampling.
@@ -37,9 +48,9 @@ class KPoints:
         Args:
             lattice: Lattice object
             mesh: Tuple (n1, n2, n3) specifying mesh density
-            shift: Optional tuple (s1, s2, s3) of integer shift flags
-                   (0 = unshifted, 1 = half-grid shift). This matches the
-                   convention used by generate_monkhorst_pack in kpoint_scf.py.
+            shift: Optional tuple (s1, s2, s3) of shift flags
+                   (0 = Gamma-centered, 1 = half-grid shift). This matches
+                   generate_monkhorst_pack in kpoint_scf.py.
         """
         self.lattice = lattice
         self.mesh = mesh
@@ -56,33 +67,10 @@ class KPoints:
         """
         Generate Monkhorst-Pack mesh.
 
-        k_i = (2*n - N - 1) / (2*N) + 0.5 * s_i / N
-
-        where n = 1, ..., N and s_i in {0, 1} is the integer shift flag
-        (s_i = 1 applies a half-grid shift of 1/(2N)).
+        k_i = (i + 0.5*s_i) / N, for i = 0, ..., N-1.  The shift flag
+        s_i = 0 gives a Gamma-centered mesh; s_i = 1 shifts it by half a step.
         """
-        n1, n2, n3 = self.mesh
-        s1, s2, s3 = self.shift
-
-        k_points = []
-
-        for i in range(n1):
-            for j in range(n2):
-                for k in range(n3):
-                    # Monkhorst-Pack formula
-                    k1 = (2*i - n1 + 1) / (2*n1) + 0.5*s1/n1
-                    k2 = (2*j - n2 + 1) / (2*n2) + 0.5*s2/n2
-                    k3 = (2*k - n3 + 1) / (2*n3) + 0.5*s3/n3
-                    
-                    k_points.append([k1, k2, k3])
-        
-        k_points = np.array(k_points)
-        
-        # Equal weights because this helper does not reduce by symmetry.
-        nk = len(k_points)
-        weights = np.ones(nk) / nk
-        
-        return k_points, weights
+        return _monkhorst_pack_fractional(self.mesh, self.shift)
     
     def _frac_to_cart_all(self):
         """Convert all k-points from fractional to Cartesian."""
