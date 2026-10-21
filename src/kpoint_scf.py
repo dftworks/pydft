@@ -583,7 +583,10 @@ class KPointSCF:
         return e_total
     
     def print_results(self):
-        """Print SCF results."""
+        """Print SCF results and return a band gap in eV when one exists."""
+        if self.total_energy is None:
+            raise RuntimeError("SCF results are unavailable; call run() first.")
+
         print("\n" + "=" * 70)
         print("RESULTS")
         print("=" * 70)
@@ -611,17 +614,33 @@ class KPointSCF:
                       f"{kdata.evals[n]*HA_TO_EV:12.6f} "
                       f"{kdata.occupations[n]:6.2f}")
         
-        # Compute band gap
-        n_occ = self.n_electrons // 2
-        vbm = -np.inf
-        cbm = np.inf
-        
+        # Find fully occupied and empty states from the computed occupations.
+        occupation_tol = 1e-8
+        occupied_energies = []
+        empty_energies = []
+        partially_occupied = False
         for kdata in self.kpoints:
-            vbm = max(vbm, kdata.evals[n_occ - 1])
-            cbm = min(cbm, kdata.evals[n_occ])
-        
-        gap = (cbm - vbm) * HA_TO_EV
-        print(f"\nBand gap: {gap:.4f} eV")
+            full = kdata.occupations >= 2.0 - occupation_tol
+            empty = kdata.occupations <= occupation_tol
+            partial = ~(full | empty)
+            partially_occupied |= np.any(partial)
+            occupied_energies.extend(kdata.evals[full])
+            empty_energies.extend(kdata.evals[empty])
+
+        gap = None
+        if partially_occupied:
+            print("\nBand gap not reported: partially occupied bands are present.")
+        elif not occupied_energies:
+            print("\nBand gap not reported: there are no occupied bands.")
+        elif not empty_energies:
+            print("\nBand gap not reported: there are no empty bands.")
+        else:
+            gap_ha = min(empty_energies) - max(occupied_energies)
+            if gap_ha > 1e-10:
+                gap = gap_ha * HA_TO_EV
+                print(f"\nBand gap: {gap:.4f} eV")
+            else:
+                print("\nBand gap not reported: occupied and empty bands overlap or touch.")
         print("=" * 70)
         
         return gap
