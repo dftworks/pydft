@@ -196,7 +196,7 @@ def automatic_kpoints(lattice, kspacing=0.1):
         while length / count > kspacing:
             count += 1
         mesh.append(count)
-    
+
     return KPoints(lattice, tuple(mesh))
 
 
