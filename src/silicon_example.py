@@ -146,6 +146,12 @@ class SiliconSCF:
         
         # Number of electrons (4 valence per Si)
         self.n_electrons = 8
+        if not isinstance(n_bands, (int, np.integer)) or n_bands < 1:
+            raise ValueError("n_bands must be a positive integer.")
+        if 2 * n_bands < self.n_electrons:
+            raise ValueError(
+                f"n_bands={n_bands} cannot hold {self.n_electrons} electrons; "
+                f"at least {self.n_electrons // 2} bands are required.")
         
         # Parameters
         self.ecut = ecut
@@ -220,9 +226,9 @@ class SiliconSCF:
         self.evecs = random_initial_guess(self.npw, self.n_bands)
         self.evals = np.zeros(self.n_bands)
         
-        # Fixed occupations (semiconductor: lowest 4 bands occupied)
-        # 8 electrons, 2 per band = 4 occupied bands
-        self.occupations = np.array([2.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0])
+        # Fill each band with up to two electrons, lowest bands first.
+        self.occupations = np.clip(
+            self.n_electrons - 2 * np.arange(self.n_bands), 0.0, 2.0)
         
         if (not isinstance(max_iter, (int, np.integer)) or max_iter < 1
                 or not np.isfinite(tol) or tol <= 0
@@ -385,10 +391,11 @@ class SiliconSCF:
             print(f"{i+1:6d} {self.evals[i]:14.6f} {self.evals[i]*HA_TO_EV:14.6f} "
                   f"{self.occupations[i]:8.2f}")
         
-        # Band gap (if we have enough bands)
-        if self.n_bands >= 5:
-            vbm = self.evals[3]  # Top of valence band (band 4)
-            cbm = self.evals[4]  # Bottom of conduction band (band 5)
+        # Band gap (when at least one conduction band is available).
+        n_occ = self.n_electrons // 2
+        if n_occ < self.n_bands:
+            vbm = self.evals[n_occ - 1]
+            cbm = self.evals[n_occ]
             gap = cbm - vbm
             print(f"\nBand gap: {gap:.4f} Ha ({gap * HA_TO_EV:.4f} eV)")
             print("(Note: This is a Gamma-point gap with model potential)")
