@@ -143,7 +143,7 @@ class SCFSolver:
     
     def _create_harmonic_potential(self, omega=0.1):
         """
-        Create the default harmonic confining potential.
+        Create a harmonic confining potential on the solver's FFT grid.
         
         V(r) = 0.5 * omega^2 * |r - r_center|^2
         """
@@ -531,7 +531,7 @@ def create_jellium_box(a, n_electrons, ecut, n_bands=None):
         ecut=ecut,
         n_bands=n_bands,
         n_electrons=n_electrons,
-        external_potential=None  # Will create harmonic potential by default
+        external_potential=None  # No external potential for jellium.
     )
     
     # Actually set V_ext to zero for true jellium

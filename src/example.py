@@ -217,7 +217,8 @@ def example_scf_harmonic():
     print(f"Electrons: {n_electrons}")
     print(f"Bands: {n_bands}")
     
-    # Create solver (uses harmonic potential by default)
+    # Create the harmonic confining potential explicitly; SCFSolver otherwise
+    # uses a flat external potential.
     solver = SCFSolver(
         lattice=lattice,
         ecut=ecut,
@@ -225,6 +226,7 @@ def example_scf_harmonic():
         n_electrons=n_electrons,
         mixer='broyden'
     )
+    solver.v_ext = solver._create_harmonic_potential()
     
     print(f"Plane waves: {solver.npw}")
     print(f"FFT grid: {solver.fft_shape}")
