@@ -21,6 +21,7 @@ Nanotube classification:
 import numpy as np
 import sys
 import os
+import warnings
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -245,7 +246,7 @@ class CarbonNanotubeSCF:
         self.rho_g = None
         self.occupations = None
 
-    def run(self, max_iter=50, tol=1e-4, verbose=True):
+    def run(self, max_iter=50, tol=1e-4, verbose=True, density_tol=1e-7):
         """
         Run SCF calculation.
 
@@ -270,10 +271,16 @@ class CarbonNanotubeSCF:
         self.occupations = np.zeros(self.n_bands)
         self.occupations[:n_occ] = 2.0
 
+        if (not isinstance(max_iter, (int, np.integer)) or max_iter < 1
+                or not np.isfinite(tol) or tol <= 0
+                or not np.isfinite(density_tol) or density_tol <= 0):
+            raise ValueError("Use positive tolerances and integer max_iter >= 1.")
+
         # SCF loop
         energy_old = 0.0
-        converged = False
-        energy_history = []
+        self.converged = False
+        self.iterations = 0
+        self.density_residual = np.inf
 
         if verbose:
             print(f"{'Iter':>4} {'E_total (Ha)':>16} {'dE (Ha)':>12} "
@@ -294,9 +301,15 @@ class CarbonNanotubeSCF:
             )
 
             rho_new = self._compute_density()
+            rho_r_new = self._g_to_r_density(rho_new)
+            rho_g_old = self.rho_g
+            self.density_residual = np.sqrt(np.mean((rho_r_new - self.rho_r)**2))
+            self.rho_g, self.rho_r = rho_new, rho_r_new
+            self.iterations = scf_iter
+            self._build_potential()
 
+            # Evaluate energy for the output density, including the final iteration.
             energy = self._compute_total_energy()
-            energy_history.append(energy)
 
             de = abs(energy - energy_old)
 
@@ -304,36 +317,28 @@ class CarbonNanotubeSCF:
                 print(f"{scf_iter:4d} {energy:16.8f} {de:12.2e} "
                       f"{de * HA_TO_EV:12.2e}")
 
-            if de < tol:
-                converged = True
+            if de < tol and self.density_residual < density_tol and scf_iter > 1:
+                self.converged = True
                 print("-" * 50)
                 print(f"SCF CONVERGED in {scf_iter} iterations")
                 break
 
-            if scf_iter > 10:
-                recent = energy_history[-6:]
-                if len(recent) == 6:
-                    odd_vals = [recent[0], recent[2], recent[4]]
-                    even_vals = [recent[1], recent[3], recent[5]]
-                    if np.std(odd_vals) < tol and np.std(even_vals) < tol:
-                        energy = np.mean(recent)
-                        converged = True
-                        print("-" * 50)
-                        print(f"SCF oscillating - using average energy "
-                              f"after {scf_iter} iterations")
-                        break
+            if scf_iter == max_iter:
+                break
 
-            rho_mixed = self.mixer.mix(self.rho_g, rho_new)
+            rho_mixed = self.mixer.mix(rho_g_old, rho_new)
             self.rho_g = rho_mixed
             self.rho_r = self._g_to_r_density(self.rho_g)
 
             energy_old = energy
 
-        if not converged:
+        if not self.converged:
             print("-" * 50)
-            print(f"Warning: SCF not converged after {max_iter} iterations")
-            if len(energy_history) > 5:
-                energy = np.mean(energy_history[-6:])
+            print(f"SCF did not converge in {max_iter} iterations")
+            warnings.warn(
+                f"SCF did not converge after {self.iterations} iterations; "
+                f"density residual={self.density_residual:.3g} e/Bohr^3",
+                RuntimeWarning, stacklevel=2)
 
         self._print_results(energy)
 
