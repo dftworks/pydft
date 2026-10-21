@@ -206,17 +206,29 @@ class Atom:
         self.species = species
 
 
-def read_xyz(filename, lattice):
+def read_xyz(filename, lattice, units="angstrom", zion_by_element=None):
     """
     Read crystal structure from XYZ file.
     
     Args:
         filename: Path to XYZ file
-        lattice: Lattice object (XYZ has Cartesian coords, need lattice)
+        lattice: Lattice object
+        units: Units of XYZ Cartesian coordinates ("angstrom" or "bohr")
+        zion_by_element: Optional mapping of element symbols to ionic charges.
+            Known elements use Crystal's defaults when omitted; unknown
+            elements must be provided here.
     
     Returns:
         Crystal object
     """
+    from .constants import ANG_TO_BOHR
+
+    units = str(units).lower()
+    if units not in ("angstrom", "bohr"):
+        raise ValueError("units must be either 'angstrom' or 'bohr'.")
+    coordinate_scale = ANG_TO_BOHR if units == "angstrom" else 1.0
+    zion_by_element = {} if zion_by_element is None else zion_by_element
+
     with open(filename, 'r') as f:
         lines = f.readlines()
     
@@ -235,10 +247,10 @@ def read_xyz(filename, lattice):
         z = float(parts[3])
         
         # Convert to fractional
-        pos_cart = np.array([x, y, z])
-        pos_frac = lattice.cart_to_frac(pos_cart)
-        
-        crystal.add_atom(symbol, pos_frac)
+        pos_cart = coordinate_scale * np.array([x, y, z])
+        pos_frac = np.mod(lattice.cart_to_frac(pos_cart), 1.0)
+
+        crystal.add_atom(symbol, pos_frac, zion_by_element.get(symbol))
     
     return crystal
 
