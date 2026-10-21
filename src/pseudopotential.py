@@ -158,14 +158,18 @@ def create_periodic_gaussian_model_potential(
     atom_positions = np.asarray(atom_positions, dtype=float)
     if atom_positions.ndim != 2 or atom_positions.shape[1] != 3:
         raise ValueError("atom_positions must have shape (natoms, 3).")
+    if not np.isfinite(atom_positions).all():
+        raise ValueError("atom_positions must contain only finite values.")
 
     miller_axes = [np.fft.fftfreq(n) * n for n in fft_shape]
     miller = np.stack(np.meshgrid(*miller_axes, indexing="ij"), axis=-1)
     g_cart = miller @ lattice.reciprocal_vectors
     g2 = np.sum(g_cart**2, axis=-1)
 
-    phases = TWOPI * np.einsum("...i,ai->...a", miller, atom_positions)
-    structure_factor = np.sum(np.exp(-1j * phases), axis=-1)
+    structure_factor = np.zeros(fft_shape, dtype=complex)
+    for atom_position in atom_positions:
+        phase = TWOPI * np.einsum("...i,i->...", miller, atom_position)
+        structure_factor += np.exp(-1j * phase)
     v_g = (-depth * np.pi**1.5 * r_c**3 / lattice.volume
            * np.exp(-g2 * r_c**2 / 4.0) * structure_factor)
 
