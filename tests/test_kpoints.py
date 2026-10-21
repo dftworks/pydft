@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
 from src.lattice import Lattice
-from src.kpoints import monkhorst_pack, automatic_kpoints, GammaPoint
+from src.gvector import GVector
+from src.kpoints import (monkhorst_pack, automatic_kpoints, GammaPoint,
+                         get_kpg_norms)
 
 def test_gamma_point():
     """Test Gamma point generator."""
@@ -37,3 +39,13 @@ def test_automatic_kpoints():
     # n = ceil(0.628 / 0.2) = 4
     assert kpts.mesh == (3, 3, 3) or kpts.mesh == (4, 4, 4)
     assert kpts.get_nk() > 0
+
+
+def test_kpg_norms_match_direct_cartesian_norms():
+    gvector = GVector(Lattice.fcc(8.0), 2.0)
+    k_cart = np.array([0.07, -0.11, 0.03])
+
+    actual = get_kpg_norms(k_cart, gvector)
+    expected = np.sum((gvector.cart + k_cart)**2, axis=1)
+
+    np.testing.assert_allclose(actual, expected)
