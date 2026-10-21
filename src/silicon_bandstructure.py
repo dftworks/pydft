@@ -180,7 +180,7 @@ def compute_eigenvalues_at_k(k_cart, gvec, hamiltonian, n_bands, kg_base):
     """
     npw = gvec.npw
     
-    # Compute |k+G|^2 for this k-point
+    # Compute the kinetic energy ½|k+G|² for this k-point.
     kg = compute_kpoint_kinetic_energies(k_cart, gvec)
     
     # Create temporary Hamiltonian with updated kinetic energy
