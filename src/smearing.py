@@ -81,6 +81,13 @@ class FermiDirac:
             raise ValueError("Entropy expects finite per-spin occupations in [0, 1].")
         return -self.kbt * np.sum(xlogy(f, f) + xlogy(1-f, 1-f))
 
+    def energy_correction(self, eigenvalues, fermi_level):
+        """Return the per-spin ``-T*S`` correction for the given levels."""
+        occupations = self.occupation_array(
+            np.asarray(eigenvalues, dtype=float), fermi_level
+        )
+        return -self.entropy(occupations)
+
     @property
     def name(self):
         return "Fermi-Dirac"
@@ -125,6 +132,11 @@ class Gaussian:
         """
         # Simplified approximation
         return 0.0
+
+    def energy_correction(self, eigenvalues, fermi_level):
+        """Return ``-sigma*exp(-x²)/(2*sqrt(pi))`` for each level."""
+        x = (np.asarray(eigenvalues) - fermi_level) / self.sigma
+        return -self.sigma * np.exp(-x**2) / (2 * np.sqrt(np.pi))
     
     @property
     def name(self):
@@ -189,6 +201,22 @@ class MethfesselPaxton:
     def entropy(self, occupations):
         """Entropy correction term."""
         return 0.0
+
+    def energy_correction(self, eigenvalues, fermi_level):
+        """Return the generalized correction ``-sigma*integral_x^inf t*f'(t)dt``.
+
+        The polynomial below is the analytic integral for the implemented
+        Methfessel-Paxton occupation function.
+        """
+        x = (np.asarray(eigenvalues) - fermi_level) / self.sigma
+        correction = 0.5 * np.exp(-x**2) / np.sqrt(np.pi)
+        if self.order >= 1:
+            correction += (-0.5 / np.sqrt(np.pi)) * (x**2 + 0.5) * np.exp(-x**2)
+        if self.order >= 2:
+            correction += (1.0 / (32 * np.sqrt(np.pi))) * (
+                8*x**4 - 8*x**2 - 2
+            ) * np.exp(-x**2)
+        return -self.sigma * correction
     
     @property
     def name(self):
@@ -217,6 +245,10 @@ class FixedOccupation:
     def entropy(self, occupations):
         """No entropy for fixed occupations."""
         return 0.0
+
+    def energy_correction(self, eigenvalues, fermi_level):
+        """Fixed occupations have no smearing energy correction."""
+        return np.zeros_like(eigenvalues, dtype=float)
     
     @property
     def name(self):
