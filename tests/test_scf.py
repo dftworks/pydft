@@ -41,7 +41,9 @@ def test_scf_first_iteration_energy_matches_output_orbitals():
     # Direct energy, independent of the solver's eigenvalue-sum bookkeeping.
     kinetic = sum(occ*np.vdot(k.evecs[:, n], k.kg_squared*k.evecs[:, n]).real
                   for n, occ in enumerate(k.occupations))
-    v = np.fft.ifftn(s.gvec.map_to_fft_grid(s.vloc_g, s.fft_shape)).real*s.n_fft
+    v = np.fft.ifftn(
+        s.density_gvec.map_to_fft_grid(s.vloc_g, s.fft_shape)
+    ).real*s.n_fft
     _, exc = lda_xc(rho)
     direct = kinetic + np.sum(rho*(v+exc))*s.volume/s.n_fft
     direct += compute_hartree_energy(s._r_to_g(rho), s.density_gvec.norms, s.volume)

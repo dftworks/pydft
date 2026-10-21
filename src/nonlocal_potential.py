@@ -15,6 +15,7 @@ import numpy as np
 from .constants import TWOPI
 from .real_spherical import real_spherical_harmonic
 from .upf_reader import UPFPseudopotential
+from .gvector import GVector
 
 
 def compute_ylm_for_kg(l, m, kg_cart):
@@ -52,12 +53,13 @@ class NonlocalPotential:
     Attributes:
         psp: UPFPseudopotential object with raw pseudopotential data
         atom_positions: Array of fractional atomic positions (natoms, 3)
-        gvec: GVector object with reciprocal lattice information
+        gvec: Orbital G-vector sphere for non-local projectors
+        local_gvec: G-vector sphere for the local potential
         vloc_g: Local potential in G-space (complex array)
         beta_g: List of beta projectors at Gamma point
     """
     
-    def __init__(self, psp, atom_positions, gvec, volume):
+    def __init__(self, psp, atom_positions, gvec, volume, local_gvec=None):
         """
         Initialize the non-local potential handler.
         
@@ -66,10 +68,14 @@ class NonlocalPotential:
             atom_positions: Fractional atomic positions (natoms, 3)
             gvec: GVector object
             volume: Cell volume in Bohr^3
+            local_gvec: Optional GVector for V_loc; defaults to the density
+                sphere with cutoff ``4 * gvec.ecut``.
         """
         self.psp = psp
         self.atom_positions = np.asarray(atom_positions)
         self.gvec = gvec
+        self.local_gvec = (GVector(gvec.lattice, 4 * gvec.ecut)
+                           if local_gvec is None else local_gvec)
         self.volume = volume
         self.npw = gvec.npw
         
@@ -86,23 +92,25 @@ class NonlocalPotential:
         Returns:
             Complex array of V_loc(G) values with structure factors
         """
-        # Get unique G-shell values
-        g_unique = np.unique(np.round(self.gvec.norms, decimals=8))
+        # The local potential must include Fourier modes up to the density
+        # cutoff so multiplication by V_loc has all G-G' components.
+        gvec = self.local_gvec
+        g_unique = np.unique(np.round(gvec.norms, decimals=8))
         
         # Compute V_loc for each shell
         vloc_shells = self.psp.get_vloc_g(g_unique, self.volume)
         
         # Map shells to G-vectors
-        vloc_g = np.zeros(self.npw, dtype=complex)
+        vloc_g = np.zeros(gvec.npw, dtype=complex)
         
         # Create shell index map
         shell_map = {round(g, 8): i for i, g in enumerate(g_unique)}
         
         # Structure factor for each atom
         for atom_pos in self.atom_positions:
-            for ig in range(self.npw):
-                m = self.gvec.miller[ig]
-                g_norm = round(self.gvec.norms[ig], 8)
+            for ig in range(gvec.npw):
+                m = gvec.miller[ig]
+                g_norm = round(gvec.norms[ig], 8)
                 shell_idx = shell_map.get(g_norm, 0)
                 
                 # Forward Fourier coefficient of V(r-tau): exp(-i G . tau).
@@ -276,7 +284,7 @@ class PseudopotentialSet:
         """
         self.pseudopotentials[element] = UPFPseudopotential(upf_path)
     
-    def setup_for_crystal(self, crystal, gvec, volume):
+    def setup_for_crystal(self, crystal, gvec, volume, local_gvec=None):
         """
         Set up non-local potentials for all species in a crystal.
         
@@ -284,6 +292,7 @@ class PseudopotentialSet:
             crystal: Crystal object with atom information
             gvec: GVector object
             volume: Cell volume
+            local_gvec: Optional GVector for local-potential Fourier modes
         """
         # Group atoms by element
         atoms_by_element = {}
@@ -301,7 +310,8 @@ class PseudopotentialSet:
                 psp=self.pseudopotentials[element],
                 atom_positions=np.array(positions),
                 gvec=gvec,
-                volume=volume
+                volume=volume,
+                local_gvec=local_gvec,
             )
     
     def get_total_vloc_g(self, gvec):
@@ -313,7 +323,17 @@ class PseudopotentialSet:
         """
         vloc_total = np.zeros(gvec.npw, dtype=complex)
         for nlpot in self.nonlocal_pots.values():
-            vloc_total += nlpot.get_vloc_g()
+            local_index = {
+                tuple(miller): i
+                for i, miller in enumerate(nlpot.local_gvec.miller)
+            }
+            try:
+                source_indices = [local_index[tuple(miller)] for miller in gvec.miller]
+            except KeyError as error:
+                raise ValueError(
+                    "Requested G-vector is outside the local-potential sphere."
+                ) from error
+            vloc_total += nlpot.get_vloc_g()[source_indices]
         return vloc_total
     
     def get_all_full_projectors(self, k_cart):

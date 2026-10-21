@@ -148,7 +148,6 @@ class KPointSCF:
         self.volume = volume
         self.n_electrons = n_electrons
         self.n_bands = n_bands
-        self.vloc_g = vloc_g
         self.nlpot = nlpot
         self.ewald_energy = ewald_energy
         
@@ -159,6 +158,24 @@ class KPointSCF:
         self.density_gvec = GVector(lattice, 4 * gvec.ecut)
         self.fft_shape = self.density_gvec.get_fft_grid_size(factor=2)
         self.n_fft = np.prod(self.fft_shape)
+
+        # Accept legacy orbital-sphere potentials by embedding their Miller
+        # coefficients in the density sphere; new UPF paths supply the full
+        # local-potential sphere directly.
+        vloc_g = np.asarray(vloc_g, dtype=complex)
+        if vloc_g.shape == (self.density_gvec.npw,):
+            self.vloc_g = vloc_g.copy()
+        elif vloc_g.shape == (self.gvec.npw,):
+            self.vloc_g = np.zeros(self.density_gvec.npw, dtype=complex)
+            density_index = {
+                tuple(miller): i for i, miller in enumerate(self.density_gvec.miller)
+            }
+            for miller, value in zip(self.gvec.miller, vloc_g):
+                self.vloc_g[density_index[tuple(miller)]] = value
+        else:
+            raise ValueError(
+                "vloc_g must match either the orbital or density G-vector sphere."
+            )
         
         # Reciprocal lattice vectors
         self.b = lattice.reciprocal_vectors
@@ -250,7 +267,7 @@ class KPointSCF:
         self._v_xc_r, self._exc_r = lda_xc(rho_real)
         
         # Local ionic pseudopotential is provided in reciprocal space.
-        vloc_fft = self.gvec.map_to_fft_grid(self.vloc_g, self.fft_shape)
+        vloc_fft = self.density_gvec.map_to_fft_grid(self.vloc_g, self.fft_shape)
         vloc_r = np.real(np.fft.ifftn(vloc_fft) * self.n_fft)
         
         # Total local potential
@@ -415,7 +432,7 @@ class KPointSCF:
                 if self.nlpot is not None:
                     e_nonlocal += kdata.weight * occ * np.vdot(
                         psi, self.nlpot.apply_vnl(psi, kdata.full_projectors)).real
-        vloc_fft = self.gvec.map_to_fft_grid(self.vloc_g, self.fft_shape)
+        vloc_fft = self.density_gvec.map_to_fft_grid(self.vloc_g, self.fft_shape)
         vloc_r = np.fft.ifftn(vloc_fft).real * self.n_fft
         e_local = np.sum(self.rho_r * vloc_r) * self.volume / self.n_fft
         e_hartree = compute_hartree_energy(self.rho_g, self.density_gvec.norms,
