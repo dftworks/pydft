@@ -147,7 +147,9 @@ def initial_density_uniform(n_electrons, volume, fft_shape):
     return np.full(fft_shape, rho_0, dtype=float)
 
 
-def initial_density_atomic(atom_species, atom_positions, gvector, fft_shape, volume):
+def initial_density_atomic(
+    atom_species, atom_positions, gvector, fft_shape, volume, sigma=1.0
+):
     """
     Create initial density from atomic superposition.
     
@@ -159,45 +161,40 @@ def initial_density_atomic(atom_species, atom_positions, gvector, fft_shape, vol
         gvector: GVector object
         fft_shape: FFT grid shape
         volume: Cell volume
+        sigma: Cartesian Gaussian width in Bohr
     
     Returns:
         rho_r: Atomic superposition density in real space
     """
-    from .lattice import Lattice
-    
-    n1, n2, n3 = fft_shape
+    if not np.isfinite(sigma) or sigma <= 0:
+        raise ValueError("sigma must be finite and positive.")
+    lattice = getattr(gvector, "lattice", None)
+    if lattice is None:
+        raise ValueError("gvector must provide the lattice for Cartesian distances.")
+
+    fft_shape = tuple(fft_shape)
+    if (len(fft_shape) != 3 or any(
+            not isinstance(n, (int, np.integer)) or n < 1 for n in fft_shape)):
+        raise ValueError("fft_shape must contain three positive integer dimensions.")
+    atom_positions = np.asarray(atom_positions, dtype=float)
+    if atom_positions.shape != (len(atom_species), 3):
+        raise ValueError("atom_positions must have shape (number of species, 3).")
+
     rho_r = np.zeros(fft_shape, dtype=float)
-    
-    # Real-space grid points
-    x = np.linspace(0, 1, n1, endpoint=False)
-    y = np.linspace(0, 1, n2, endpoint=False)
-    z = np.linspace(0, 1, n3, endpoint=False)
+
+    # Fractional grid, transformed using the full lattice metric below.
+    fractional_axes = [np.arange(n, dtype=float) / n for n in fft_shape]
+    grid_frac = np.stack(
+        np.meshgrid(*fractional_axes, indexing="ij"), axis=-1)
+    normalization = (2 * np.pi * sigma**2)**(-1.5)
     
     # For each atom, add Gaussian charge distribution
     for sp, pos in zip(atom_species, atom_positions):
-        zion = sp.zion
-        
-        # Gaussian width (rough estimate from atomic radius)
-        sigma = 1.0  # Bohr
-        
-        for i, xi in enumerate(x):
-            for j, yj in enumerate(y):
-                for k, zk in enumerate(z):
-                    # Fractional displacement (with periodic images)
-                    dx = xi - pos[0]
-                    dy = yj - pos[1]
-                    dz = zk - pos[2]
-                    
-                    # Wrap to nearest image
-                    dx = dx - np.round(dx)
-                    dy = dy - np.round(dy)
-                    dz = dz - np.round(dz)
-                    
-                    # This is a simplification - actual atomic density
-                    # would need proper unit cell handling
-                    r2 = (dx**2 + dy**2 + dz**2) * 100  # Rough scaling
-                    
-                    rho_r[i,j,k] += zion * np.exp(-r2 / (2*sigma**2)) / (2*np.pi*sigma**2)**1.5
+        dfrac = grid_frac - pos
+        dfrac -= np.round(dfrac)
+        dcart = dfrac @ lattice.vectors
+        r2 = np.sum(dcart**2, axis=-1)
+        rho_r += sp.zion * normalization * np.exp(-r2 / (2 * sigma**2))
     
     # Normalize to total electrons
     total = np.sum(rho_r) * volume / np.prod(fft_shape)
