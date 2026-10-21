@@ -180,6 +180,12 @@ class KPointSCF:
         # Occupation metadata
         self.fermi_level = None
         self.smearing_name = None
+        self.smearing = None
+        self.energy_label = None
+        self.internal_energy = None
+        self.smearing_correction = 0.0
+        self.free_energy = None
+        self.total_energy = None
         
         # Hamiltonian template
         self.hamiltonian = Hamiltonian(gvec, volume, fft_shape=self.fft_shape)
@@ -353,6 +359,13 @@ class KPointSCF:
 
         self.fermi_level = fermi_level
         self.smearing_name = smearing_obj.name
+        self.smearing = smearing_obj
+        if smearing_obj.name == "Fermi-Dirac":
+            self.energy_label = "Helmholtz free energy"
+        elif smearing_obj.name == "Fixed":
+            self.energy_label = "Internal energy"
+        else:
+            self.energy_label = "Smearing-corrected energy"
 
     def _validate_total_charge(self, tol=1e-8):
         """Sanity-check that occupations reproduce the requested electron count."""
@@ -373,13 +386,24 @@ class KPointSCF:
             e_band += kdata.weight * np.sum(kdata.occupations * kdata.evals)
         return e_band
     
+    def _compute_smearing_correction(self):
+        """Integrate each scheme's energy correction over k and spin."""
+        if self.smearing is None:
+            return 0.0
+        correction = 0.0
+        for kdata in self.kpoints:
+            per_spin = self.smearing.energy_correction(
+                kdata.evals, self.fermi_level
+            )
+            correction += kdata.weight * 2.0 * np.sum(per_spin)
+        return correction
+
     def _compute_total_energy(self):
-        """Direct output-orbital internal energy, valid away from SCF.
+        """Compute internal and smearing-corrected energies of output orbitals.
 
         E = T + E_local + E_nonlocal + E_H[rho] + E_xc[rho] + E_ion.
-        No input-potential eigenvalues enter this expression. Smearing controls
-        occupations; this is internal energy, not the finite-temperature free
-        energy. See pydft-book/totalenergy.tex and scf.tex.
+        Fermi-Dirac reports E-TS. Gaussian and Methfessel-Paxton report their
+        smearing-corrected integration energy; fixed occupations report E.
         """
         e_kinetic = 0.0
         e_nonlocal = 0.0
@@ -399,7 +423,15 @@ class KPointSCF:
         rho_real = np.maximum(self.rho_r.real, 1e-20)
         _, exc = lda_xc(rho_real)
         e_xc = compute_xc_energy(rho_real, exc, self.volume, self.n_fft)
-        return e_kinetic + e_local + e_nonlocal + e_hartree + e_xc + self.ewald_energy
+        self.internal_energy = (
+            e_kinetic + e_local + e_nonlocal + e_hartree + e_xc + self.ewald_energy
+        )
+        self.smearing_correction = self._compute_smearing_correction()
+        self.total_energy = self.internal_energy + self.smearing_correction
+        self.free_energy = (
+            self.total_energy if self.energy_label == "Helmholtz free energy" else None
+        )
+        return self.total_energy
 
     def _r_to_g(self, arr_r):
         """Transform from real space to G-space."""
@@ -473,7 +505,7 @@ class KPointSCF:
 
         
         if verbose:
-            print(f"\n{'Iter':>4} {'E_total (Ha)':>14} {'dE (Ha)':>12}")
+            print(f"\n{'Iter':>4} {'SCF objective (Ha)':>18} {'dE (Ha)':>12}")
             print("-" * 35)
         
         for scf_iter in range(1, max_iter + 1):
@@ -539,8 +571,10 @@ class KPointSCF:
         print("RESULTS")
         print("=" * 70)
         
-        print(f"\nTotal energy: {self.total_energy:.8f} Ha "
+        print(f"\n{self.energy_label}: {self.total_energy:.8f} Ha "
               f"({self.total_energy * HA_TO_EV:.6f} eV)")
+        print(f"Internal energy: {self.internal_energy:.8f} Ha")
+        print(f"Smearing correction: {self.smearing_correction:.8f} Ha")
         print(f"Ewald energy: {self.ewald_energy:.8f} Ha")
         if self.fermi_level is not None:
             print(f"Fermi level: {self.fermi_level:.8f} Ha "
