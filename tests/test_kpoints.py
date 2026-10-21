@@ -3,7 +3,7 @@ import pytest
 from src.lattice import Lattice
 from src.gvector import GVector
 from src.kpoints import (monkhorst_pack, automatic_kpoints, GammaPoint,
-                         get_kpg_norms)
+                         get_kpg_norms, high_symmetry_path)
 from src.kpoint_scf import generate_monkhorst_pack
 
 def test_gamma_point():
@@ -87,3 +87,24 @@ def test_monkhorst_pack_apis_share_shift_semantics(mesh, shift):
 
     np.testing.assert_allclose(canonical(kpoints.k_frac), canonical(scf_points))
     np.testing.assert_allclose(kpoints.weights, scf_weights)
+
+
+def test_high_symmetry_label_positions_match_path_distances():
+    lattice = Lattice.cubic(1.0)
+    npoints = 10
+    k_frac, k_dist, labels, label_positions = high_symmetry_path(
+        lattice, "GXMG", npoints_per_segment=npoints)
+
+    assert labels == list("GXMG")
+    np.testing.assert_allclose(label_positions, k_dist[::npoints])
+    np.testing.assert_allclose(k_frac[::npoints], [
+        [0.0, 0.0, 0.0],
+        [0.5, 0.0, 0.0],
+        [0.5, 0.5, 0.0],
+        [0.0, 0.0, 0.0],
+    ])
+
+
+def test_high_symmetry_path_rejects_unknown_labels():
+    with pytest.raises(ValueError, match="Unknown high-symmetry point"):
+        high_symmetry_path(Lattice.cubic(1.0), "GXQ")

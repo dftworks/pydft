@@ -215,6 +215,7 @@ def high_symmetry_path(lattice, path_string, npoints_per_segment=20):
         k_frac: K-points in fractional coordinates
         k_dist: Cumulative distance along path (for plotting)
         labels: Labels for high-symmetry points
+        label_positions: Cumulative distances for the high-symmetry labels
     
     Note: Only supports cubic lattices in this simplified version.
     """
@@ -226,6 +227,12 @@ def high_symmetry_path(lattice, path_string, npoints_per_segment=20):
         'R': np.array([0.5, 0.5, 0.5]),
         'L': np.array([0.5, 0.5, 0.5]),      # Same as R for simple cubic
     }
+
+    if not isinstance(npoints_per_segment, (int, np.integer)) or npoints_per_segment < 1:
+        raise ValueError("npoints_per_segment must be a positive integer.")
+    unknown = sorted(set(path_string) - special_points.keys())
+    if unknown:
+        raise ValueError(f"Unknown high-symmetry point(s): {', '.join(unknown)}")
     
     # Parse path
     points = [special_points[c] for c in path_string if c in special_points]
@@ -266,9 +273,9 @@ def high_symmetry_path(lattice, path_string, npoints_per_segment=20):
         
         # Add label for end of segment
         labels.append(path_string[i+1])
-        label_positions.append(cumulative_dist + np.linalg.norm(
-            (k2 - k1)[0] * b[0] + (k2 - k1)[1] * b[1] + (k2 - k1)[2] * b[2]
-        ) / npoints_per_segment * (npoints_per_segment - 1))
+        segment_cart = (k2 - k1)[0] * b[0] + (k2 - k1)[1] * b[1] + (k2 - k1)[2] * b[2]
+        label_positions.append(
+            cumulative_dist + np.linalg.norm(segment_cart) / npoints_per_segment)
     
     # Add final point
     k_frac.append(points[-1])
