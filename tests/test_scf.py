@@ -8,6 +8,7 @@ from src.kpoint_scf import KPointSCF
 from src.hamiltonian import g_to_r
 from src.hartree import compute_hartree_energy
 from src.xc import lda_xc
+from src.example import example_scf_harmonic
 
 
 def make_solver():
@@ -76,3 +77,20 @@ def test_kpoint_density_condition_prevents_false_energy_convergence():
         s.run(max_iter=2, tol=1e3, density_tol=1e-20, verbose=False, smearing='fixed')
     assert not s.converged
     assert s.density_residual > 1e-20
+
+
+def test_harmonic_example_passes_centered_nonconstant_trap(monkeypatch):
+    captured = {}
+
+    def capture_potential(solver, **kwargs):
+        captured["potential"] = solver.v_ext.copy()
+        captured["shape"] = solver.fft_shape
+        return 0.0
+
+    monkeypatch.setattr(SCFSolver, "run", capture_potential)
+    example_scf_harmonic()
+
+    potential = captured["potential"]
+    center = tuple(size // 2 for size in captured["shape"])
+    assert np.ptp(potential) > 0
+    assert np.unravel_index(np.argmin(potential), potential.shape) == center
