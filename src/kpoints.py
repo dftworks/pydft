@@ -287,19 +287,14 @@ def high_symmetry_path(lattice, path_string, npoints_per_segment=20):
 
 def get_kpg_norms(k_cart, gvector):
     """
-    Compute |k + G| for all G-vectors at a given k-point.
+    Compute |k + G|^2 for all G-vectors at a given k-point.
     
     Args:
         k_cart: K-point in Cartesian coordinates (1D array of length 3)
         gvector: GVector object
     
     Returns:
-        kpg: Array of |k + G|^2 values, shape (npw,)
+        kpg_squared: Array of |k + G|^2 values, shape (npw,)
     """
-    kpg_squared = np.zeros(gvector.npw)
-    
-    for i in range(gvector.npw):
-        kpg = k_cart + gvector.gvecs[i]
-        kpg_squared[i] = np.sum(kpg**2)
-    
-    return kpg_squared
+    k_cart = np.asarray(k_cart, dtype=float)
+    return np.sum((gvector.cart + k_cart)**2, axis=1)
