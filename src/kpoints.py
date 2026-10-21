@@ -182,14 +182,22 @@ def automatic_kpoints(lattice, kspacing=0.1):
     Returns:
         KPoints object
     """
+    if not np.isfinite(kspacing) or kspacing <= 0:
+        raise ValueError("kspacing must be finite and positive.")
+
     b = lattice.reciprocal_vectors
+
+    # Start from the floor, then compare the represented spacing directly.
+    # The loop handles ratios that lie just above an integer after rounding.
+    mesh = []
+    for reciprocal_vector in b:
+        length = np.linalg.norm(reciprocal_vector)
+        count = max(1, int(length / kspacing))
+        while length / count > kspacing:
+            count += 1
+        mesh.append(count)
     
-    # Compute mesh density based on reciprocal lattice vector lengths
-    n1 = max(1, int(np.linalg.norm(b[0]) / kspacing))
-    n2 = max(1, int(np.linalg.norm(b[1]) / kspacing))
-    n3 = max(1, int(np.linalg.norm(b[2]) / kspacing))
-    
-    return KPoints(lattice, (n1, n2, n3))
+    return KPoints(lattice, tuple(mesh))
 
 
 def high_symmetry_path(lattice, path_string, npoints_per_segment=20):
