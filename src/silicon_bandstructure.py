@@ -223,6 +223,12 @@ class SiliconBandStructure:
         print(f"Lattice constant: {self.a:.4f} Bohr ({self.a * BOHR_TO_ANG:.4f} Ang)")
         
         self.n_electrons = 8
+        if not isinstance(n_bands, (int, np.integer)) or n_bands < 1:
+            raise ValueError("n_bands must be a positive integer.")
+        if 2 * n_bands < self.n_electrons:
+            raise ValueError(
+                f"n_bands={n_bands} cannot hold {self.n_electrons} electrons; "
+                f"at least {self.n_electrons // 2} bands are required.")
         self.ecut = ecut
         self.n_bands = n_bands
         
@@ -267,8 +273,9 @@ class SiliconBandStructure:
         evecs = random_initial_guess(self.npw, self.n_bands)
         evals = np.zeros(self.n_bands)
         
-        # Occupations
-        occupations = np.array([2.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0])
+        # Fill each band with up to two electrons, lowest bands first.
+        occupations = np.clip(
+            self.n_electrons - 2 * np.arange(self.n_bands), 0.0, 2.0)
         
         # Mixer
         mixer = LinearMixer(alpha=0.3)
