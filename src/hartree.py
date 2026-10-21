@@ -154,33 +154,24 @@ def compute_hartree_stress(rhog, g_cart, g_norms, volume):
     """
     Compute Hartree contribution to stress tensor.
     
-    sigma_ij = -(1/Omega) * sum_{G!=0} 4*pi * |rho(G)|^2 / G^4 * 
+    At fixed electron count, rho(G) scales as 1/Omega under strain. With
+    stress = -(1/Omega) dE_H/dstrain, this gives
+
+    sigma_ij = (1/2) * sum_{G!=0} 4*pi * |rho(G)|^2 / G^4 *
                (delta_ij * G^2 - 2 * G_i * G_j)
     
     Args:
         rhog: Density in G-space
         g_cart: Cartesian G-vectors
         g_norms: |G| for each G-vector
-        volume: Cell volume
+        volume: Cell volume. Retained for API consistency; the density Fourier
+            coefficients already contain their 1/volume normalization.
     
     Returns:
         3x3 stress tensor
     """
-    stress = np.zeros((3, 3))
-    
-    # Skip G=0
-    for ig in range(1, len(g_norms)):
-        g = g_cart[ig]
-        g2 = g_norms[ig]**2
-        rho_g2 = np.abs(rhog[ig])**2
-        
-        prefactor = FOURPI * rho_g2 / (g2 * g2)
-        
-        for i in range(3):
-            for j in range(3):
-                delta_ij = 1.0 if i == j else 0.0
-                stress[i, j] += prefactor * (delta_ij * g2 - 2.0 * g[i] * g[j])
-    
-    stress *= -1.0 / volume
-    
-    return stress
+    g2 = g_norms[1:]**2
+    weights = FOURPI * np.abs(rhog[1:])**2 / g2**2
+    dyadic = np.einsum('gi,gj->gij', g_cart[1:], g_cart[1:])
+    tensor_terms = g2[:, None, None] * np.eye(3) - 2.0 * dyadic
+    return 0.5 * np.einsum('g,gij->ij', weights, tensor_terms)
