@@ -120,7 +120,8 @@ class SiliconUPF:
             psp=self.psp,
             atom_positions=self.atom_positions,
             gvec=self.gvec,
-            volume=self.volume
+            volume=self.volume,
+            local_gvec=self.density_gvec,
         )
         self.vloc_g_atomic = self.nlpot.get_vloc_g()
         print(f"  V_loc(G=0) contribution: {np.real(self.vloc_g_atomic[0]):.6f} Ha")
@@ -358,7 +359,9 @@ class SiliconUPF:
         v_xc_r, self._exc_r = lda_xc(rho_real)
         
         # Local pseudopotential in real space
-        vloc_fft = self.gvec.map_to_fft_grid(self.vloc_g_atomic, self.fft_shape)
+        vloc_fft = self.density_gvec.map_to_fft_grid(
+            self.vloc_g_atomic, self.fft_shape
+        )
         vloc_r = np.real(np.fft.ifftn(vloc_fft) * self.n_fft)
         
         # Total local potential
