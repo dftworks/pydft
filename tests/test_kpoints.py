@@ -33,13 +33,32 @@ def test_monkhorst_pack_mesh():
     assert np.allclose(kpts_shifted.get_k_frac(0), [0.5, 0.5, 0.5])
 
 def test_automatic_kpoints():
-    """Test automatic k-point mesh generation based on spacing."""
-    lattice = Lattice.cubic(10.0)  # b = 2pi/10 = 0.628
-    
-    kpts = automatic_kpoints(lattice, kspacing=0.2)
-    # n = ceil(0.628 / 0.2) = 4
-    assert kpts.mesh == (3, 3, 3) or kpts.mesh == (4, 4, 4)
-    assert kpts.get_nk() > 0
+    """Every generated reciprocal spacing respects the requested maximum."""
+    lattice = Lattice.cubic(10.0)
+    b_lengths = np.linalg.norm(lattice.reciprocal_vectors, axis=1)
+
+    for spacing in (0.1, 0.2):
+        kpts = automatic_kpoints(lattice, kspacing=spacing)
+        actual = b_lengths / np.asarray(kpts.mesh)
+        assert np.all(actual <= spacing)
+        assert kpts.get_nk() > 0
+
+
+def test_automatic_kpoints_handles_ratio_just_above_integer():
+    lattice = Lattice.cubic(10.0)
+    b_length = np.linalg.norm(lattice.reciprocal_vectors[0])
+    spacing = np.nextafter(b_length / 3, 0.0)
+
+    kpts = automatic_kpoints(lattice, kspacing=spacing)
+
+    assert kpts.mesh == (4, 4, 4)
+    assert np.all(b_length / np.asarray(kpts.mesh) <= spacing)
+
+
+@pytest.mark.parametrize("spacing", [0, -0.1, np.inf, np.nan])
+def test_automatic_kpoints_rejects_nonpositive_or_nonfinite_spacing(spacing):
+    with pytest.raises(ValueError, match="finite and positive"):
+        automatic_kpoints(Lattice.cubic(10.0), kspacing=spacing)
 
 
 def test_kpg_norms_match_direct_cartesian_norms():
