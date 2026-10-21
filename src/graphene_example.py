@@ -29,11 +29,11 @@ from src.crystal import Crystal
 from src.gvector import GVector
 from src.xc import lda_xc, compute_xc_energy, compute_xc_potential_energy
 from src.hartree import compute_hartree_potential, compute_hartree_energy
-from src.ewald import Ewald
 from src.smearing import create_smearing, find_fermi_level
 from src.hamiltonian import Hamiltonian, g_to_r
 from src.eigensolver import PCGEigensolver, random_initial_guess
 from src.mixing import LinearMixer
+from src.pseudopotential import create_periodic_gaussian_model_potential
 
 
 def create_graphene_crystal():
@@ -87,40 +87,10 @@ def create_graphene_potential(lattice, fft_shape, v_depth=1.2, r_c=1.2):
         v_depth: Depth of potential well (Hartree)
         r_c: Characteristic radius (Bohr)
     """
-    n1, n2, n3 = fft_shape
-    v_ext = np.zeros(fft_shape, dtype=float)
-
-    # Fractional coordinates grid
-    x = np.linspace(0, 1, n1, endpoint=False)
-    y = np.linspace(0, 1, n2, endpoint=False)
-    z = np.linspace(0, 1, n3, endpoint=False)
-
-    # Atom positions in fractional coordinates (honeycomb basis)
-    atoms = [
-        np.array([1.0/3.0, 2.0/3.0, 0.0]),
-        np.array([2.0/3.0, 1.0/3.0, 0.0])
-    ]
-
-    a, b, c = lattice.vectors
-
-    for i, xi in enumerate(x):
-        for j, yj in enumerate(y):
-            for k, zk in enumerate(z):
-                grid_frac = np.array([xi, yj, zk])
-
-                for atom_frac in atoms:
-                    # Minimum image convention
-                    d_frac = grid_frac - atom_frac
-                    d_frac = d_frac - np.round(d_frac)
-
-                    # Convert to Cartesian
-                    d_cart = d_frac[0]*a + d_frac[1]*b + d_frac[2]*c
-                    r2 = np.sum(d_cart**2)
-
-                    # Gaussian model potential
-                    v_ext[i, j, k] += -v_depth * np.exp(-r2 / r_c**2)
-
-    return v_ext
+    atoms = np.array([[1.0/3.0, 2.0/3.0, 0.0],
+                      [2.0/3.0, 1.0/3.0, 0.0]])
+    return create_periodic_gaussian_model_potential(
+        lattice, atoms, fft_shape, depth=v_depth, r_c=r_c)
 
 
 class GrapheneSCF:
@@ -184,12 +154,6 @@ class GrapheneSCF:
         print("\nBuilding model pseudopotential...")
         self.v_ext = create_graphene_potential(self.lattice, self.fft_shape)
 
-        # Ion-ion energy (Ewald)
-        positions = self.crystal.get_positions()
-        charges = self.crystal.get_charges()
-        self.ewald = Ewald(self.lattice, positions, charges, self.gvec)
-        print(f"Ewald ion-ion energy: {self.ewald.energy:.6f} Ha")
-
         # Hamiltonian
         self.hamiltonian = Hamiltonian(self.gvec, self.volume, fft_shape=self.fft_shape)
 
@@ -215,7 +179,7 @@ class GrapheneSCF:
         Run SCF calculation.
 
         Returns:
-            Total energy in Hartree
+            Electronic energy in the Gaussian model potential, in Hartree.
         """
         print("\n" + "-" * 60)
         print("Starting SCF iteration...")
@@ -247,7 +211,7 @@ class GrapheneSCF:
         self.density_residual = np.inf
 
         if verbose:
-            print(f"{'Iter':>4} {'E_total (Ha)':>16} {'dE (Ha)':>12} "
+            print(f"{'Iter':>4} {'E_model (Ha)':>16} {'dE (Ha)':>12} "
                   f"{'dE (eV)':>12}")
             print("-" * 50)
 
@@ -380,7 +344,7 @@ class GrapheneSCF:
             rho_real, self._v_xc_r, self.volume, self.n_fft)
 
         # Total (Harris-Foulkes formula)
-        e_total = e_band - e_hartree + e_xc - e_vxc + self.ewald.energy
+        e_total = e_band - e_hartree + e_xc - e_vxc
 
         return e_total
 
@@ -391,10 +355,10 @@ class GrapheneSCF:
         print("=" * 60)
 
         print(f"\nMaterial: Graphene")
-        print(f"Total energy: {energy:.8f} Ha ({energy * HA_TO_EV:.6f} eV)")
-        print(f"Energy per atom: {energy/2:.8f} Ha "
+        print("Electronic energy in model potential: "
+              f"{energy:.8f} Ha ({energy * HA_TO_EV:.6f} eV)")
+        print(f"Electronic energy per atom (model potential): {energy/2:.8f} Ha "
               f"({energy/2 * HA_TO_EV:.6f} eV)")
-        print(f"Ewald energy: {self.ewald.energy:.8f} Ha")
 
         print(f"\nEigenvalues (Gamma point):")
         print(f"{'Band':>6} {'Energy (Ha)':>14} {'Energy (eV)':>14} "

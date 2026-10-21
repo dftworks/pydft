@@ -32,11 +32,11 @@ from src.crystal import Crystal
 from src.gvector import GVector
 from src.xc import lda_xc, compute_xc_energy, compute_xc_potential_energy
 from src.hartree import compute_hartree_potential, compute_hartree_energy
-from src.ewald import Ewald
 from src.smearing import create_smearing, find_fermi_level
 from src.hamiltonian import Hamiltonian, g_to_r
 from src.eigensolver import PCGEigensolver, random_initial_guess
 from src.mixing import LinearMixer
+from src.pseudopotential import create_periodic_gaussian_model_potential
 
 
 def create_cnt_crystal(n=4, m=0, vacuum=18.0):
@@ -126,31 +126,8 @@ def create_cnt_potential(lattice, crystal, fft_shape,
         v_depth: Depth of potential well (Hartree)
         r_c: Characteristic radius (Bohr)
     """
-    n1, n2, n3 = fft_shape
-    v_ext = np.zeros(fft_shape, dtype=float)
-
-    x = np.linspace(0, 1, n1, endpoint=False)
-    y = np.linspace(0, 1, n2, endpoint=False)
-    z = np.linspace(0, 1, n3, endpoint=False)
-
-    atoms_frac = crystal.get_positions()
-    a, b, c = lattice.vectors
-
-    for i, xi in enumerate(x):
-        for j, yj in enumerate(y):
-            for k, zk in enumerate(z):
-                grid_frac = np.array([xi, yj, zk])
-
-                for atom_frac in atoms_frac:
-                    d_frac = grid_frac - atom_frac
-                    d_frac = d_frac - np.round(d_frac)
-
-                    d_cart = d_frac[0]*a + d_frac[1]*b + d_frac[2]*c
-                    r2 = np.sum(d_cart**2)
-
-                    v_ext[i, j, k] += -v_depth * np.exp(-r2 / r_c**2)
-
-    return v_ext
+    return create_periodic_gaussian_model_potential(
+        lattice, crystal.get_positions(), fft_shape, depth=v_depth, r_c=r_c)
 
 
 class CarbonNanotubeSCF:
@@ -222,12 +199,6 @@ class CarbonNanotubeSCF:
         self.v_ext = create_cnt_potential(
             self.lattice, self.crystal, self.fft_shape)
 
-        # Ion-ion energy (Ewald)
-        positions = self.crystal.get_positions()
-        charges = self.crystal.get_charges()
-        self.ewald = Ewald(self.lattice, positions, charges, self.gvec)
-        print(f"Ewald ion-ion energy: {self.ewald.energy:.6f} Ha")
-
         # Hamiltonian
         self.hamiltonian = Hamiltonian(self.gvec, self.volume, fft_shape=self.fft_shape)
 
@@ -251,7 +222,7 @@ class CarbonNanotubeSCF:
         Run SCF calculation.
 
         Returns:
-            Total energy in Hartree
+            Electronic energy in the Gaussian model potential, in Hartree.
         """
         print("\n" + "-" * 60)
         print("Starting SCF iteration...")
@@ -283,7 +254,7 @@ class CarbonNanotubeSCF:
         self.density_residual = np.inf
 
         if verbose:
-            print(f"{'Iter':>4} {'E_total (Ha)':>16} {'dE (Ha)':>12} "
+            print(f"{'Iter':>4} {'E_model (Ha)':>16} {'dE (Ha)':>12} "
                   f"{'dE (eV)':>12}")
             print("-" * 50)
 
@@ -391,7 +362,7 @@ class CarbonNanotubeSCF:
         e_vxc = compute_xc_potential_energy(
             rho_real, self._v_xc_r, self.volume, self.n_fft)
 
-        e_total = e_band - e_hartree + e_xc - e_vxc + self.ewald.energy
+        e_total = e_band - e_hartree + e_xc - e_vxc
         return e_total
 
     def _print_results(self, energy):
@@ -402,10 +373,11 @@ class CarbonNanotubeSCF:
         n_occ = self.n_electrons // 2
 
         print(f"\nMaterial: ({self.crystal.natoms // 4},0) Carbon Nanotube")
-        print(f"Total energy: {energy:.8f} Ha ({energy * HA_TO_EV:.6f} eV)")
-        print(f"Energy per atom: {energy/self.natoms:.8f} Ha "
+        print("Electronic energy in model potential: "
+              f"{energy:.8f} Ha ({energy * HA_TO_EV:.6f} eV)")
+        print("Electronic energy per atom (model potential): "
+              f"{energy/self.natoms:.8f} Ha "
               f"({energy/self.natoms * HA_TO_EV:.6f} eV)")
-        print(f"Ewald energy: {self.ewald.energy:.8f} Ha")
 
         print(f"\nEigenvalues (Gamma point):")
         print(f"{'Band':>6} {'Energy (Ha)':>14} {'Energy (eV)':>14} "
