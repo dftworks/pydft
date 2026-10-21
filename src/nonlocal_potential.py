@@ -71,6 +71,7 @@ class NonlocalPotential:
             local_gvec: Optional GVector for V_loc; defaults to the density
                 sphere with cutoff ``4 * gvec.ecut``.
         """
+        self._validate_supported_upf_data(psp)
         self.psp = psp
         self.atom_positions = np.asarray(atom_positions)
         self.gvec = gvec
@@ -84,6 +85,23 @@ class NonlocalPotential:
         
         # Compute beta projectors at Gamma point
         self.beta_g = self._compute_beta_g(gvec.norms)
+
+    @staticmethod
+    def _validate_supported_upf_data(psp):
+        """Reject UPF features that this implementation cannot apply exactly."""
+        if getattr(psp, "has_nlcc", False):
+            raise NotImplementedError(
+                "UPF non-linear core correction (PP_NLCC) is not supported; "
+                "the core charge is not included in the XC density.")
+
+        dij = np.asarray(getattr(psp, "dij", np.empty((0, 0))))
+        if dij.size == 0 or dij.ndim != 2:
+            return
+        diagonal = np.diag(np.diag(dij))
+        if not np.allclose(dij, diagonal, rtol=1e-10, atol=1e-12):
+            raise NotImplementedError(
+                "UPF off-diagonal PP_DIJ elements are not supported; "
+                "the non-local operator currently applies only diagonal D_ii.")
         
     def _compute_vloc_g(self):
         """
