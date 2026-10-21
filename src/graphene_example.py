@@ -26,8 +26,6 @@ from src.constants import HA_TO_EV, BOHR_TO_ANG, ANG_TO_BOHR, TWOPI
 from src.lattice import Lattice
 from src.crystal import Crystal
 from src.gvector import GVector
-from src.pwbasis import PWBasis
-from src.kpoints import monkhorst_pack, gamma_only
 from src.xc import lda_xc, compute_xc_energy, compute_xc_potential_energy
 from src.hartree import compute_hartree_potential, compute_hartree_energy
 from src.ewald import Ewald
@@ -130,18 +128,17 @@ class GrapheneSCF:
 
     This example highlights several features unique to 2D materials:
     - Hexagonal lattice with vacuum along the c direction
-    - K-point mesh is dense in-plane but uses only 1 point along c
-    - The Dirac cone at the K point produces a zero (or very small) gap
+    - The SCF calculation is Gamma-only; it does not sample the Brillouin zone
+    - The Dirac cone at K is discussed but not resolved by this Gamma-only SCF
     """
 
-    def __init__(self, ecut=5.0, n_bands=8, kpts_mesh=(4, 4, 1)):
+    def __init__(self, ecut=5.0, n_bands=8):
         """
         Initialize graphene SCF calculation.
 
         Args:
             ecut: Energy cutoff in Hartree
             n_bands: Number of bands to compute
-            kpts_mesh: K-point mesh (n1, n2, n3); n3 should be 1 for 2D
         """
         print("=" * 60)
         print("Graphene DFT Calculation (Educational)")
@@ -180,10 +177,7 @@ class GrapheneSCF:
         print(f"Bands: {n_bands}")
         print(f"Electrons: {self.n_electrons}")
 
-        # K-points (dense in-plane, single point along c)
-        self.kpts = monkhorst_pack(self.lattice, *kpts_mesh)
-        self.nk = self.kpts.nk
-        print(f"K-points: {kpts_mesh} mesh = {self.nk} points")
+        print("Sampling: Gamma-only (1 k-point)")
 
         # External potential (model pseudopotential)
         print("\nBuilding model pseudopotential...")
@@ -452,8 +446,7 @@ def main():
     # Create and run graphene SCF
     gr_scf = GrapheneSCF(
         ecut=5.0,                # Moderate cutoff for speed
-        n_bands=8,               # 4 valence + 4 conduction
-        kpts_mesh=(4, 4, 1)      # Dense in-plane, 1 along vacuum direction
+        n_bands=8                # 4 valence + 4 conduction
     )
 
     # Run SCF with educational-level tolerance
