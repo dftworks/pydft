@@ -15,6 +15,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 import os
+import warnings
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -247,8 +248,12 @@ class SiliconBandStructure:
         self.rho_g = None
         self.v_local_r = None
     
-    def run_scf(self, max_iter=50, tol=1e-4):
+    def run_scf(self, max_iter=50, tol=1e-4, density_tol=1e-7):
         """Run SCF to get self-consistent potential."""
+        if (not isinstance(max_iter, (int, np.integer)) or max_iter < 1
+                or not np.isfinite(tol) or tol <= 0
+                or not np.isfinite(density_tol) or density_tol <= 0):
+            raise ValueError("Use positive tolerances and integer max_iter >= 1.")
         print("\n" + "-" * 60)
         print("Step 1: SCF calculation at Gamma point")
         print("-" * 60)
@@ -272,22 +277,16 @@ class SiliconBandStructure:
         eigensolver = PCGEigensolver(self.npw, self.n_bands)
         
         energy_old = 0.0
-        energy_history = []
+        self.converged = False
+        self.iterations = 0
+        self.density_residual = np.inf
         
         print(f"{'Iter':>4} {'dE (Ha)':>12}")
         print("-" * 20)
         
         for scf_iter in range(1, max_iter + 1):
             # Build potential
-            v_hartree_g = compute_hartree_potential(self.rho_g, self.density_gvec.norms)
-            v_hartree_fft = self.density_gvec.map_to_fft_grid(v_hartree_g, self.fft_shape)
-            v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
-            
-            rho_real = np.maximum(np.real(self.rho_r), 1e-20)
-            v_xc_r, _ = lda_xc(rho_real)
-            
-            self.v_local_r = v_hartree_r + v_xc_r + self.v_ext
-            self.hamiltonian.set_local_potential(self.v_local_r)
+            self._build_potential()
             
             # Solve eigenvalue problem
             eigensolver.solve(
@@ -310,37 +309,56 @@ class SiliconBandStructure:
             
             rho_g_new = self._r_to_g(rho_r_new)
             
+            # Track the output density before mixing.
+            self.density_residual = np.sqrt(np.mean((rho_r_new - self.rho_r)**2))
+            rho_g_old = self.rho_g
+            self.rho_r, self.rho_g = rho_r_new, rho_g_new
+            self.iterations = scf_iter
+            self._build_potential()
+
             # Energy (band energy)
             energy = np.sum(occupations * evals)
-            energy_history.append(energy)
             
             de = abs(energy - energy_old)
             print(f"{scf_iter:4d} {de:12.2e}")
             
-            if de < tol:
+            if de < tol and self.density_residual < density_tol and scf_iter > 1:
+                self.converged = True
                 print("-" * 20)
                 print(f"SCF converged in {scf_iter} iterations")
                 break
-            
-            # Check oscillation
-            if scf_iter > 10 and len(energy_history) >= 6:
-                recent = energy_history[-6:]
-                odd_std = np.std([recent[0], recent[2], recent[4]])
-                even_std = np.std([recent[1], recent[3], recent[5]])
-                if odd_std < tol and even_std < tol:
-                    print("-" * 20)
-                    print(f"SCF oscillating - converged after {scf_iter} iterations")
-                    break
+
+            if scf_iter == max_iter:
+                break
             
             # Mix
-            rho_g_mixed = mixer.mix(self.rho_g, rho_g_new)
+            rho_g_mixed = mixer.mix(rho_g_old, rho_g_new)
             self.rho_g = rho_g_mixed
             self.rho_r = self._g_to_r(self.rho_g)
             
             energy_old = energy
+
+        if not self.converged:
+            warnings.warn(
+                f"SCF did not converge after {self.iterations} iterations; "
+                f"density residual={self.density_residual:.3g} e/Bohr^3",
+                RuntimeWarning, stacklevel=2)
         
         print(f"Gamma point eigenvalues: {evals[:4] * HA_TO_EV} eV (valence)")
         return evals
+
+    def _build_potential(self):
+        """Build the local potential for the current density."""
+        v_hartree_g = compute_hartree_potential(
+            self.rho_g, self.density_gvec.norms)
+        v_hartree_fft = self.density_gvec.map_to_fft_grid(
+            v_hartree_g, self.fft_shape)
+        v_hartree_r = np.real(np.fft.ifftn(v_hartree_fft) * self.n_fft)
+
+        rho_real = np.maximum(np.real(self.rho_r), 1e-20)
+        v_xc_r, _ = lda_xc(rho_real)
+        self.v_local_r = v_hartree_r + v_xc_r + self.v_ext
+        self.hamiltonian.set_local_potential(self.v_local_r)
     
     def compute_bands(self, path_labels=['L', 'G', 'X', 'W', 'K', 'G'], npts=15):
         """Compute band structure along k-path."""

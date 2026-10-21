@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 import os
+import warnings
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -159,6 +160,7 @@ class SiliconUPF:
         occupation_scheme='fd',
         electronic_temperature=300.0,
         smearing_sigma=0.01,
+        density_tol=1e-7,
     ):
         """
         Run SCF calculation.
@@ -180,6 +182,7 @@ class SiliconUPF:
             return self._run_scf_kpoints(
                 max_iter,
                 tol,
+                density_tol,
                 kmesh,
                 kshift,
                 occupation_scheme,
@@ -187,12 +190,13 @@ class SiliconUPF:
                 smearing_sigma,
             )
         else:
-            return self._run_scf_gamma(max_iter, tol)
+            return self._run_scf_gamma(max_iter, tol, density_tol)
     
     def _run_scf_kpoints(
         self,
         max_iter,
         tol,
+        density_tol,
         kmesh,
         kshift,
         occupation_scheme,
@@ -233,12 +237,16 @@ class SiliconUPF:
             smearing=occupation_scheme,
             temperature=electronic_temperature,
             sigma=smearing_sigma,
+            density_tol=density_tol,
         )
         
         # Store converged potential for band structure
         self.v_local_r = self.kscf.get_converged_potential()
         self.rho_r = self.kscf.rho_r
         self.rho_g = self.kscf.rho_g
+        self.converged = self.kscf.converged
+        self.iterations = self.kscf.iterations
+        self.density_residual = self.kscf.density_residual
         self.hamiltonian.set_local_potential(self.v_local_r)
         
         # Keep first-kpoint eigensystem for plotting/reporting helpers.
@@ -250,8 +258,12 @@ class SiliconUPF:
         
         return e_total
     
-    def _run_scf_gamma(self, max_iter, tol):
+    def _run_scf_gamma(self, max_iter, tol, density_tol=1e-7):
         """Run the Gamma-only SCF path."""
+        if (not isinstance(max_iter, (int, np.integer)) or max_iter < 1
+                or not np.isfinite(tol) or tol <= 0
+                or not np.isfinite(density_tol) or density_tol <= 0):
+            raise ValueError("Use positive tolerances and integer max_iter >= 1.")
         print("\n" + "-" * 70)
         print("SCF Calculation (Gamma-only)")
         print("-" * 70)
@@ -269,14 +281,17 @@ class SiliconUPF:
         occupations = np.zeros(self.n_bands)
         n_occ = self.n_electrons // 2
         occupations[:n_occ] = 2.0
+        self.occupations = occupations
         
         # Mixer - use linear mixing for stability
         mixer = LinearMixer(alpha=0.2)
         
         energy_old = 0.0
-        energy_history = []
+        self.converged = False
+        self.iterations = 0
+        self.density_residual = np.inf
         
-        print(f"\n{'Iter':>4} {'E_band (Ha)':>14} {'dE (Ha)':>12}")
+        print(f"\n{'Iter':>4} {'E_total (Ha)':>14} {'dE (Ha)':>12}")
         print("-" * 35)
         
         for scf_iter in range(1, max_iter + 1):
@@ -313,35 +328,38 @@ class SiliconUPF:
             
             rho_g_new = self._r_to_g(rho_r_new)
             
-            # Band energy
-            e_band = np.sum(occupations * self.evals)
-            energy_history.append(e_band)
-            
-            de = abs(e_band - energy_old)
-            print(f"{scf_iter:4d} {e_band:14.8f} {de:12.2e}")
-            
-            if de < tol and scf_iter > 3:
+            rho_g_old = self.rho_g
+            self.density_residual = np.sqrt(np.mean((rho_r_new - self.rho_r)**2))
+            self.rho_r, self.rho_g = rho_r_new, rho_g_new
+            self.iterations = scf_iter
+            self._build_potential()
+
+            # The SCF objective is the total energy, not the band sum.
+            e_total = self._compute_total_energy(occupations)
+            de = abs(e_total - energy_old)
+            print(f"{scf_iter:4d} {e_total:14.8f} {de:12.2e}")
+
+            if de < tol and self.density_residual < density_tol and scf_iter > 1:
+                self.converged = True
                 print("-" * 35)
                 print(f"SCF converged in {scf_iter} iterations")
                 break
-            
-            # Check oscillation
-            if scf_iter > 10 and len(energy_history) >= 6:
-                recent = energy_history[-6:]
-                if np.std(recent) < tol * 10:
-                    print("-" * 35)
-                    print(f"SCF converged (oscillation) in {scf_iter} iterations")
-                    break
-            
+
+            if scf_iter == max_iter:
+                break
+
             # Mix densities
-            rho_g_mixed = mixer.mix(self.rho_g, rho_g_new)
+            rho_g_mixed = mixer.mix(rho_g_old, rho_g_new)
             self.rho_g = rho_g_mixed
             self.rho_r = self._g_to_r(self.rho_g)
             
-            energy_old = e_band
-        
-        # Compute total energy
-        e_total = self._compute_total_energy(occupations)
+            energy_old = e_total
+
+        if not self.converged:
+            warnings.warn(
+                f"SCF did not converge after {self.iterations} iterations; "
+                f"density residual={self.density_residual:.3g} e/Bohr^3",
+                RuntimeWarning, stacklevel=2)
         
         self._print_results(e_total, occupations)
         
