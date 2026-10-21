@@ -36,7 +36,7 @@ class TotalEnergy:
         e_local: Local potential energy
         e_nonlocal: Non-local potential energy
         e_ewald: Ion-ion Coulomb energy
-        e_entropy: Entropy contribution (for smearing)
+        e_entropy: Positive T*S entropy term, subtracted from internal energy
         e_total: Total energy
     """
     
@@ -59,6 +59,9 @@ class TotalEnergy:
         
         Args:
             method: 'harris' or 'direct'
+
+        The ``e_entropy`` component stores positive ``T*S`` and is subtracted
+        from the chosen internal-energy expression.
         
         Returns:
             Total energy in Hartree
@@ -72,8 +75,8 @@ class TotalEnergy:
             self.e_total = (self.e_kinetic + self.e_local + self.e_nonlocal +
                            self.e_hartree + self.e_xc + self.e_ewald)
         
-        # Add entropy contribution (for smearing)
-        self.e_total += self.e_entropy
+        # e_entropy stores positive T*S, so F = E - T*S.
+        self.e_total -= self.e_entropy
         
         return self.e_total
     
@@ -89,7 +92,7 @@ class TotalEnergy:
             print(f"  XC potential:     {self.e_vxc:16.8f}")
             print(f"  Ewald energy:     {self.e_ewald:16.8f}")
             if abs(self.e_entropy) > 1e-10:
-                print(f"  Entropy:          {self.e_entropy:16.8f}")
+                print(f"  T*S (subtracted): {self.e_entropy:16.8f}")
             print("-" * 50)
             print(f"  TOTAL ENERGY:     {self.e_total:16.8f} Ha")
             print(f"                    {self.e_total * HA_TO_EV:16.8f} eV")
@@ -108,29 +111,41 @@ def compute_band_energy(eigenvalues, occupations, k_weights=1.0):
     Args:
         eigenvalues: Eigenvalues, shape (nbands,) or (nk, nbands)
         occupations: Occupation numbers, same shape
-        k_weights: K-point weights
+        k_weights: K-point weights. A scalar is divided equally over k-points.
     
     Returns:
         Band energy in Hartree
     """
     if eigenvalues.ndim == 1:
-        return np.sum(occupations * eigenvalues)
+        if np.isscalar(k_weights):
+            weight = float(k_weights)
+        else:
+            k_weights = np.asarray(k_weights)
+            if k_weights.shape != (1,):
+                raise ValueError("Single-k k_weights must be a scalar or length one.")
+            weight = k_weights[0]
+        return weight * np.sum(occupations * eigenvalues)
     else:
         if np.isscalar(k_weights):
-            k_weights = np.ones(eigenvalues.shape[0]) * k_weights
+            k_weights = np.full(eigenvalues.shape[0], float(k_weights) / eigenvalues.shape[0])
+        else:
+            k_weights = np.asarray(k_weights)
+            if k_weights.shape != (eigenvalues.shape[0],):
+                raise ValueError("k_weights must have shape (nk,).")
         return np.sum(k_weights[:, np.newaxis] * occupations * eigenvalues)
 
 
 def compute_kinetic_energy(evecs, occupations, kg, k_weights=1.0):
     """
-    Compute kinetic energy.
+    Compute kinetic energy from kinetic-energy diagonals ``1/2 |k+G|^2``.
     
-    E_kin = (1/2) * sum_{n,k} w_k * f_{n,k} * sum_G |c_{n,k}(G)|^2 * |k+G|^2
+    E_kin = sum_{n,k} w_k * f_{n,k} * sum_G |c_{n,k}(G)|^2 * kg(G)
     
     Args:
         evecs: Wavefunctions in G-space
         occupations: Occupation numbers
-        kg: |k+G|^2 values for each plane wave
+        kg: Kinetic-energy values ``1/2 |k+G|^2`` for each plane wave,
+            matching ``PWBasis.kg`` and ``Hamiltonian.kg``.
         k_weights: K-point weights
     
     Returns:
@@ -140,11 +155,18 @@ def compute_kinetic_energy(evecs, occupations, kg, k_weights=1.0):
     
     if evecs.ndim == 2:
         # Single k-point
+        if np.isscalar(k_weights):
+            k_weight = float(k_weights)
+        else:
+            k_weights = np.asarray(k_weights)
+            if k_weights.shape != (1,):
+                raise ValueError("Single-k k_weights must be a scalar or length one.")
+            k_weight = k_weights[0]
         nbands = evecs.shape[1]
         for iband in range(nbands):
             if abs(occupations[iband]) < 1e-10:
                 continue
-            e_kin += 0.5 * occupations[iband] * np.sum(
+            e_kin += k_weight * occupations[iband] * np.sum(
                 np.abs(evecs[:, iband])**2 * kg
             )
     else:
@@ -153,14 +175,18 @@ def compute_kinetic_energy(evecs, occupations, kg, k_weights=1.0):
         nbands = evecs.shape[2]
         
         if np.isscalar(k_weights):
-            k_weights = np.ones(nk) * k_weights
+            k_weights = np.full(nk, float(k_weights) / nk)
+        else:
+            k_weights = np.asarray(k_weights)
+            if k_weights.shape != (nk,):
+                raise ValueError("k_weights must have shape (nk,).")
         
         for ik in range(nk):
             for iband in range(nbands):
                 occ = occupations[ik, iband] if occupations.ndim > 1 else occupations[iband]
                 if abs(occ) < 1e-10:
                     continue
-                e_kin += 0.5 * k_weights[ik] * occ * np.sum(
+                e_kin += k_weights[ik] * occ * np.sum(
                     np.abs(evecs[ik, :, iband])**2 * kg[ik]
                 )
     

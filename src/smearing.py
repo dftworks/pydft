@@ -301,7 +301,7 @@ def find_fermi_level(eigenvalues, weights, n_electrons, smearing,
     
     Args:
         eigenvalues: Array of shape (nk, n_bands) or (n_bands,)
-        weights: K-point weights, shape (nk,) or scalar 1.0
+        weights: K-point weights, shape (nk,) or scalar total weight
         n_electrons: Target number of electrons
         smearing: Smearing object
         spin_factor: 2.0 for spin-paired (default), 1.0 for spin-polarized
@@ -411,8 +411,19 @@ def compute_band_energy(eigenvalues, occupations, weights=1.0):
         Band energy in Hartree
     """
     if eigenvalues.ndim == 1:
-        return np.sum(occupations * eigenvalues)
+        if np.isscalar(weights):
+            weight = float(weights)
+        else:
+            weights = np.asarray(weights)
+            if weights.shape != (1,):
+                raise ValueError("Single-k weights must be a scalar or length one.")
+            weight = weights[0]
+        return weight * np.sum(occupations * eigenvalues)
     else:
         if np.isscalar(weights):
-            weights = np.ones(eigenvalues.shape[0]) * weights
+            weights = np.full(eigenvalues.shape[0], float(weights) / eigenvalues.shape[0])
+        else:
+            weights = np.asarray(weights)
+            if weights.shape != (eigenvalues.shape[0],):
+                raise ValueError("weights must have shape (nk,).")
         return np.sum(weights[:, np.newaxis] * occupations * eigenvalues)
