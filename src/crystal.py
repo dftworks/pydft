@@ -41,7 +41,7 @@ class Crystal:
             for atom in atoms:
                 if isinstance(atom, tuple):
                     symbol, position = atom[0], atom[1]
-                    zion = atom[2] if len(atom) > 2 else self._default_zion(symbol)
+                    zion = atom[2] if len(atom) > 2 else None
                     self.add_atom(symbol, position, zion)
                 else:
                     self.atoms.append(atom)
@@ -54,7 +54,12 @@ class Crystal:
             'Na': 1, 'Mg': 2, 'Al': 3, 'Si': 4, 'P': 5, 'S': 6, 'Cl': 7, 'Ar': 8,
             'K': 1, 'Ca': 2,
         }
-        return defaults.get(symbol, 1)
+        try:
+            return defaults[symbol]
+        except KeyError as exc:
+            raise ValueError(
+                f"No default ionic charge is defined for element {symbol!r}; "
+                "pass zion explicitly.") from exc
     
     def add_atom(self, symbol, position, zion=None):
         """
@@ -65,12 +70,17 @@ class Crystal:
             position: Fractional coordinates [x, y, z]
             zion: Ionic charge (optional, defaults based on element)
         """
-        if zion is None:
-            zion = self._default_zion(symbol)
-        
         # Create or get atomic species
         if symbol not in self.species:
+            if zion is None:
+                zion = self._default_zion(symbol)
             self.species[symbol] = AtomicSpecies(symbol, zion)
+        else:
+            existing_zion = self.species[symbol].zion
+            if zion is not None and zion != existing_zion:
+                raise ValueError(
+                    f"Element {symbol!r} already uses zion={existing_zion}; "
+                    f"cannot add it with conflicting zion={zion}.")
         
         atom = Atom(symbol, np.array(position), self.species[symbol])
         self.atoms.append(atom)
